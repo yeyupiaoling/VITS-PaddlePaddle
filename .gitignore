@@ -1,0 +1,10 @@
+.idea/
+pretrained_model/
+output/
+models/
+dataset/
+log/
+build/
+dist/
+ppvits.egg-info/
+test.py
