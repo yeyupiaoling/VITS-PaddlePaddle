@@ -45,7 +45,7 @@ class PPVITSPredictor:
         text_norm = text_to_sequence(text, hps.symbols, [] if is_symbol else hps.data.text_cleaners)
         if hps.data.add_blank:
             text_norm = commons.intersperse(text_norm, 0)
-        text_norm = paddle.to_tensor(data=text_norm, dtype='int64')
+        text_norm = paddle.to_tensor(data=text_norm, dtype=paddle.int64)
         return text_norm
 
     def generate(self, text, spk, language, noise_scale=0.667, noise_scale_w=0.6, speed=1):
@@ -57,8 +57,8 @@ class PPVITSPredictor:
         stn_tst = self.get_text(text, self.configs, False)
         with no_grad():
             x_tst = stn_tst.unsqueeze(0)
-            x_tst_lengths = paddle.to_tensor(data=[stn_tst.shape[0]], dtype='int64')
-            sid = paddle.to_tensor(data=[speaker_id], dtype='int64')
+            x_tst_lengths = paddle.to_tensor(data=[stn_tst.shape[0]], dtype=paddle.int64)
+            sid = paddle.to_tensor(data=[speaker_id], dtype=paddle.int64)
             audio = self.net_g.infer(x_tst, x_tst_lengths, sid=sid, noise_scale=noise_scale,
                                      noise_scale_w=noise_scale_w,
                                      length_scale=1.0 / speed)[0][0, 0].data.cpu().float().numpy()

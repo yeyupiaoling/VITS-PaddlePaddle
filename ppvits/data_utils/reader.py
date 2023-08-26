@@ -71,12 +71,12 @@ class TextAudioSpeakerLoader(paddle.io.Dataset):
             text_norm = text_to_sequence(text, self.symbols, self.text_cleaners)
         if self.add_blank:
             text_norm = commons.intersperse(text_norm, 0)
-        text_norm = paddle.to_tensor(text_norm, dtype='int64')
+        text_norm = paddle.to_tensor(text_norm, dtype=paddle.int64)
         return text_norm
 
     @staticmethod
     def get_sid(sid):
-        sid = paddle.to_tensor([int(sid)], dtype='int64')
+        sid = paddle.to_tensor([int(sid)], dtype=paddle.int64)
         return sid
 
     def __getitem__(self, index):

@@ -4,18 +4,16 @@ import platform
 import shutil
 
 import paddle
-import paddle.distributed as dist
 import yaml
 from paddle.distributed import fleet
+from paddle.io import DataLoader, DistributedBatchSampler
 from paddle.nn import functional as F
-from paddle.io import DataLoader
 from tqdm import tqdm
 from visualdl import LogWriter
 
 from ppvits.data_utils.collate_fn import TextAudioSpeakerCollate
 from ppvits.data_utils.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from ppvits.data_utils.reader import TextAudioSpeakerLoader
-from ppvits.data_utils.sampler import DistributedBucketSampler
 from ppvits.models.commons import clip_grad_value_, slice_segments
 from ppvits.models.losses import generator_loss, discriminator_loss, feature_loss, kl_loss
 from ppvits.models.models import SynthesizerTrn, MultiPeriodDiscriminator
@@ -51,12 +49,9 @@ class PPVITSTrainer(object):
         train_dataset = TextAudioSpeakerLoader(self.configs.data.training_files, self.configs.data, self.symbols)
         train_sampler = None
         if n_gpus > 1:
-            train_sampler = DistributedBucketSampler(train_dataset,
-                                                     self.configs.train.batch_size,
-                                                     [32, 300, 400, 500, 600, 700, 800, 900, 1000],
-                                                     num_replicas=n_gpus,
-                                                     rank=rank,
-                                                     shuffle=True)
+            train_sampler = DistributedBatchSampler(dataset=train_dataset,
+                                                    batch_size=self.configs.dataset_conf.dataLoader.batch_size,
+                                                    shuffle=True)
         collate_fn = TextAudioSpeakerCollate()
         self.train_loader = DataLoader(train_dataset, num_workers=self.configs.data.num_workers,
                                        shuffle=(train_sampler is None), collate_fn=collate_fn,
@@ -68,44 +63,49 @@ class PPVITSTrainer(object):
                                           collate_fn=collate_fn)
         logger.info('训练数据：{}'.format(len(train_dataset)))
 
-    def __setup_model(self, rank, n_gpus, resume_model=None, pretrained_model=None):
+    def __setup_model(self, n_gpus, resume_model=None, pretrained_model=None):
         latest_epoch = 0
         self.net_g = SynthesizerTrn(len(self.symbols),
                                     self.configs.data.filter_length // 2 + 1,
                                     self.configs.train.segment_size // self.configs.data.hop_length,
                                     n_speakers=self.configs.data.n_speakers,
-                                    **self.configs.model).cuda(rank)
-        self.net_d = MultiPeriodDiscriminator(self.configs.model.use_spectral_norm).cuda(rank)
+                                    **self.configs.model)
+        self.net_d = MultiPeriodDiscriminator(self.configs.model.use_spectral_norm)
+        # 学习率衰减
+        self.scheduler_g = paddle.optimizer.lr.ExponentialDecay(learning_rate=self.configs.train.learning_rate,
+                                                                gamma=self.configs.train.lr_decay)
+        self.scheduler_d = paddle.optimizer.lr.ExponentialDecay(learning_rate=self.configs.train.learning_rate,
+                                                                gamma=self.configs.train.lr_decay)
         # 获取优化方法
         self.optim_g = paddle.optimizer.AdamW(parameters=self.net_g.parameters(),
-                                              learning_rate=self.configs.train.learning_rate,
+                                              learning_rate=self.scheduler_g,
                                               beta1=self.configs.train.betas[0],
                                               beta2=self.configs.train.betas[1],
                                               epsilon=self.configs.train.eps)
         self.optim_d = paddle.optimizer.AdamW(parameters=self.net_d.parameters(),
-                                              learning_rate=self.configs.train.learning_rate,
+                                              learning_rate=self.scheduler_d,
                                               beta1=self.configs.train.betas[0],
                                               beta2=self.configs.train.betas[1],
                                               epsilon=self.configs.train.eps)
         # 自动恢复训练
-        latest_g_checkpoint_path = os.path.join(self.model_dir, "latest", "g_net.pth")
-        latest_d_checkpoint_path = os.path.join(self.model_dir, "latest", "d_net.pth")
+        latest_g_checkpoint_path = os.path.join(self.model_dir, "latest", "g_net.pdparams")
+        latest_d_checkpoint_path = os.path.join(self.model_dir, "latest", "d_net.pdparams")
         if os.path.exists(latest_g_checkpoint_path):
             _, _, _, latest_epoch = load_checkpoint(latest_g_checkpoint_path, self.net_g, self.optim_g)
         if os.path.exists(latest_d_checkpoint_path):
             _, _, _, latest_epoch = load_checkpoint(latest_d_checkpoint_path, self.net_d, self.optim_d)
         # 加载预训练模型
         if pretrained_model:
-            pretrained_g_model_path = os.path.join(pretrained_model, "g_net.pth")
-            pretrained_d_model_path = os.path.join(pretrained_model, "d_net.pth")
+            pretrained_g_model_path = os.path.join(pretrained_model, "g_net.pdparams")
+            pretrained_d_model_path = os.path.join(pretrained_model, "d_net.pdparams")
             if os.path.exists(pretrained_g_model_path):
                 load_checkpoint(pretrained_g_model_path, self.net_g, None)
             if os.path.exists(pretrained_d_model_path):
                 load_checkpoint(pretrained_d_model_path, self.net_d, None)
         # 加载恢复训练模型
         if resume_model:
-            resume_g_model_path = os.path.join(resume_model, "g_net.pth")
-            resume_d_model_path = os.path.join(resume_model, "d_net.pth")
+            resume_g_model_path = os.path.join(resume_model, "g_net.pdparams")
+            resume_d_model_path = os.path.join(resume_model, "d_net.pdparams")
             if os.path.exists(resume_g_model_path):
                 _, _, _, latest_epoch = load_checkpoint(resume_g_model_path, self.net_g, self.optim_g)
             if os.path.exists(resume_d_model_path):
@@ -125,17 +125,15 @@ class PPVITSTrainer(object):
             self.net_g = fleet.distributed_model(self.net_g)
             self.net_d = fleet.distributed_model(self.net_d)
 
-        self.scheduler_g = torch.optim.lr_scheduler.ExponentialLR(self.optim_g, gamma=self.configs.train.lr_decay)
-        self.scheduler_d = torch.optim.lr_scheduler.ExponentialLR(self.optim_d, gamma=self.configs.train.lr_decay)
         # 半精度训练
-        self.amp_scaler = GradScaler(enabled=self.configs.train.fp16_run)
+        self.amp_scaler = paddle.amp.GradScaler(enable=self.configs.train.fp16_run)
         return latest_epoch
 
     def train(self, epochs, resume_model=None, pretrained_model=None):
         # 获取有多少张显卡训练
-        n_gpus = torch.cuda.device_count()
+        n_gpus = paddle.distributed.get_world_size()
         writer = None
-        rank = int(os.environ.get("LOCAL_RANK", 0))
+        rank = paddle.distributed.get_rank()
         if n_gpus > 1:
             # 初始化Fleet环境
             strategy = fleet.DistributedStrategy()
@@ -147,13 +145,13 @@ class PPVITSTrainer(object):
         # 获取数据
         self.__setup_dataloader(rank=rank, n_gpus=n_gpus)
         # 获取模型
-        latest_epoch = self.__setup_model(rank=rank, n_gpus=n_gpus,
+        latest_epoch = self.__setup_model(n_gpus=n_gpus,
                                           resume_model=resume_model,
                                           pretrained_model=pretrained_model)
         self.train_step = 0
         if rank == 0:
-            writer.add_scalar('Train/lr_g', self.scheduler_g.get_last_lr()[0], latest_epoch)
-            writer.add_scalar('Train/lr_d', self.scheduler_d.get_last_lr()[0], latest_epoch)
+            writer.add_scalar('Train/lr_g', self.scheduler_g.get_lr(), latest_epoch)
+            writer.add_scalar('Train/lr_d', self.scheduler_d.get_lr(), latest_epoch)
         # 开始训练
         for epoch_id in range(latest_epoch, epochs):
             epoch_id += 1
@@ -163,8 +161,8 @@ class PPVITSTrainer(object):
             self.scheduler_d.step()
             # 多卡训练只使用一个进程执行评估和保存模型
             if rank == 0:
-                writer.add_scalar('Train/lr_g', self.scheduler_g.get_last_lr()[0], epoch_id)
-                writer.add_scalar('Train/lr_d', self.scheduler_d.get_last_lr()[0], epoch_id)
+                writer.add_scalar('Train/lr_g', self.scheduler_g.get_lr(), epoch_id)
+                writer.add_scalar('Train/lr_d', self.scheduler_d.get_lr(), epoch_id)
                 logger.info('=' * 70)
                 self.evaluate(generator=self.net_g, eval_loader=self.eval_loader, writer=writer, epoch=epoch_id)
                 # 保存模型
@@ -176,9 +174,9 @@ class PPVITSTrainer(object):
         latest_dir = os.path.join(self.model_dir, "latest")
         # 保存模型
         save_checkpoint(self.net_g, self.optim_g, self.configs.train.learning_rate, epoch_id,
-                        os.path.join(save_dir, "g_net.pth"))
+                        os.path.join(save_dir, "g_net.pdparams"))
         save_checkpoint(self.net_d, self.optim_d, self.configs.train.learning_rate, epoch_id,
-                        os.path.join(save_dir, "d_net.pth"))
+                        os.path.join(save_dir, "d_net.pdparams"))
         if os.path.exists(latest_dir):
             shutil.rmtree(latest_dir)
         shutil.copytree(save_dir, latest_dir)
@@ -192,12 +190,8 @@ class PPVITSTrainer(object):
         self.net_d.train()
         for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) \
                 in enumerate(tqdm(self.train_loader, desc=f'epoch [{epoch}/{max_epochs}]')):
-            x, x_lengths = x.cuda(rank, non_blocking=True), x_lengths.cuda(rank, non_blocking=True)
-            spec, spec_lengths = spec.cuda(rank, non_blocking=True), spec_lengths.cuda(rank, non_blocking=True)
-            y, y_lengths = y.cuda(rank, non_blocking=True), y_lengths.cuda(rank, non_blocking=True)
-            speakers = speakers.cuda(rank, non_blocking=True)
 
-            with autocast(enabled=self.configs.train.fp16_run):
+            with paddle.amp.auto_cast(enable=self.configs.train.fp16_run):
                 y_hat, l_length, attn, ids_slice, x_mask, z_mask, \
                     (z, z_p, m_p, logs_p, m_q, logs_q) = self.net_g(x, x_lengths, spec, spec_lengths, speakers)
 
@@ -221,27 +215,27 @@ class PPVITSTrainer(object):
 
                 # Discriminator
                 y_d_hat_r, y_d_hat_g, _, _ = self.net_d(y, y_hat.detach())
-                with autocast(enabled=False):
+                with paddle.amp.auto_cast(enable=False):
                     loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
                     loss_disc_all = loss_disc
-            self.optim_d.zero_grad()
+            self.optim_d.clear_grad()
             self.amp_scaler.scale(loss_disc_all).backward()
             self.amp_scaler.unscale_(self.optim_d)
             clip_grad_value_(self.net_d.parameters(), None)
             self.amp_scaler.step(self.optim_d)
 
-            with autocast(enabled=self.configs.train.fp16_run):
+            with paddle.amp.auto_cast(enable=self.configs.train.fp16_run):
                 # Generator
                 y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = self.net_d(y, y_hat)
-                with autocast(enabled=False):
-                    loss_dur = torch.sum(l_length.float())
+                with paddle.amp.auto_cast(enable=False):
+                    loss_dur = paddle.sum(l_length.float())
                     loss_mel = F.l1_loss(y_mel, y_hat_mel) * self.configs.train.c_mel
                     loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * self.configs.train.c_kl
 
                     loss_fm = feature_loss(fmap_r, fmap_g)
                     loss_gen, losses_gen = generator_loss(y_d_hat_g)
                     loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
-            self.optim_g.zero_grad()
+            self.optim_g.clear_grad()
             self.amp_scaler.scale(loss_gen_all).backward()
             self.amp_scaler.unscale_(self.optim_g)
             grad_norm_g = clip_grad_value_(self.net_g.parameters(), None)
@@ -249,7 +243,6 @@ class PPVITSTrainer(object):
             self.amp_scaler.update()
 
             if rank == 0 and batch_idx % self.configs.train.log_interval == 0:
-                lr = self.optim_g.param_groups[0]['lr']
                 scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "grad_norm_g": grad_norm_g}
                 scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur,
                                     "loss/g/kl": loss_kl})
@@ -263,17 +256,12 @@ class PPVITSTrainer(object):
 
     def evaluate(self, generator, eval_loader, writer, epoch):
         generator.eval()
-        if isinstance(generator, torch.nn.parallel.DistributedDataParallel):
-            eval_generator = generator.module
+        if isinstance(generator, paddle.DataParallel):
+            eval_generator = generator._layers
         else:
             eval_generator = generator
-        with torch.no_grad():
+        with paddle.no_grad():
             for batch_idx, (x, x_lengths, spec, spec_lengths, y, y_lengths, speakers) in enumerate(eval_loader):
-                x, x_lengths = x.cuda(0), x_lengths.cuda(0)
-                spec, spec_lengths = spec.cuda(0), spec_lengths.cuda(0)
-                y, y_lengths = y.cuda(0), y_lengths.cuda(0)
-                speakers = speakers.cuda(0)
-
                 # remove else
                 x = x[:1]
                 x_lengths = x_lengths[:1]
@@ -299,9 +287,9 @@ class PPVITSTrainer(object):
                                               self.configs.data.win_length,
                                               self.configs.data.mel_fmin,
                                               self.configs.data.mel_fmax)
-        image_dict = {"gen/mel": plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())}
+        image_dict = {"gen/mel": plot_spectrogram_to_numpy(y_hat_mel[0].numpy())}
         audio_dict = {"gen/audio": y_hat[0, :, :y_hat_lengths[0]]}
-        image_dict.update({"gt/mel": plot_spectrogram_to_numpy(mel[0].cpu().numpy())})
+        image_dict.update({"gt/mel": plot_spectrogram_to_numpy(mel[0].numpy())})
         audio_dict.update({"gt/audio": y[0, :, :y_lengths[0]]})
         # 可视化
         for k, v in image_dict.items():

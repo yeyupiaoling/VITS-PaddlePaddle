@@ -15,21 +15,21 @@ class TextAudioSpeakerCollate(object):
         batch: [text_normalized, spec_normalized, wav_normalized, sid]
         """
         # Right zero-pad all one-hot text sequences to max input length
-        ids_sorted_decreasing = paddle.argsort(paddle.to_tensor([x[1].shape[1] for x in batch], dtype='int64'),
+        ids_sorted_decreasing = paddle.argsort(paddle.to_tensor([x[1].shape[1] for x in batch], dtype=paddle.int64),
                                                axis=0, descending=True)
 
         max_text_len = max([len(x[0]) for x in batch])
         max_spec_len = max([x[1].shape[1] for x in batch])
         max_wav_len = max([x[2].shape[1] for x in batch])
 
-        text_lengths = paddle.to_tensor(len(batch), dtype='int64')
-        spec_lengths = paddle.to_tensor(len(batch), dtype='int64')
-        wav_lengths = paddle.to_tensor(len(batch), dtype='int64')
-        sid = paddle.to_tensor(len(batch), dtype='int64')
+        text_lengths = paddle.to_tensor(len(batch), dtype=paddle.int64)
+        spec_lengths = paddle.to_tensor(len(batch), dtype=paddle.int64)
+        wav_lengths = paddle.to_tensor(len(batch), dtype=paddle.int64)
+        sid = paddle.to_tensor(len(batch), dtype=paddle.int64)
 
-        text_padded = paddle.empty(shape=[len(batch), max_text_len], dtype='int64')
-        spec_padded = paddle.empty(shape=[len(batch), batch[0][1].shape[0], max_spec_len], dtype='float32')
-        wav_padded = paddle.empty(shape=[len(batch), 1, max_wav_len], dtype='float32')
+        text_padded = paddle.empty(shape=[len(batch), max_text_len], dtype=paddle.int64)
+        spec_padded = paddle.empty(shape=[len(batch), batch[0][1].shape[0], max_spec_len], dtype=paddle.float32)
+        wav_padded = paddle.empty(shape=[len(batch), 1, max_wav_len], dtype=paddle.float32)
 
         text_padded.zero_()
         spec_padded.zero_()
