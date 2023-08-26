@@ -17,6 +17,7 @@ pyyaml>=5.4.1
 monotonic-align
 eng_to_ipa
 ko_pron
+cn2an
 indic_transliteration
 num_thai
 opencc
