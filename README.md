@@ -1,16 +1,17 @@
 简体中文 | [English]()
 
-# 基于Pytorch实现的语音合成系统
+# 基于PaddlePaddle实现的语音合成系统
 
 ![python version](https://img.shields.io/badge/python-3.8+-orange.svg)
-![GitHub forks](https://img.shields.io/github/forks/yeyupiaoling/VITS-Pytorch)
-![GitHub Repo stars](https://img.shields.io/github/stars/yeyupiaoling/VITS-Pytorch)
-![GitHub](https://img.shields.io/github/license/yeyupiaoling/VITS-Pytorch)
+![GitHub forks](https://img.shields.io/github/forks/yeyupiaoling/VITS-PaddlePaddle)
+![GitHub Repo stars](https://img.shields.io/github/stars/yeyupiaoling/VITS-PaddlePaddle)
+![GitHub](https://img.shields.io/github/license/yeyupiaoling/VITS-PaddlePaddle)
 ![支持系统](https://img.shields.io/badge/支持系统-Win/Linux/MAC-9cf)
 
 # 前言
 
-本项目是基于Pytorch的语音合成项目，使用的是VITS，这种模型时端到端的，使用起来非常简单。
+本项目是基于PaddlePaddle的语音合成项目，使用的是VITS，VITS（Variational Inference with adversarial learning for end-to-end Text-to-Speech）是一种语音合成方法，这种时端到端的模型使用起来非常简单，不需要文本对齐等太复杂的流程，直接一键训练和生成，大大降低了学习门槛。
+
 
 **欢迎大家扫码入知识星球或者QQ群讨论，知识星球里面提供项目的模型文件和博主其他相关项目的模型文件，也包括其他一些资源。**
 
@@ -23,7 +24,7 @@
 
 - Anaconda 3
 - Python 3.8
-- Pytorch 1.13.1
+- PaddlePaddle 2.5.1
 - Windows 10 or Ubuntu 18.04
 
 
@@ -35,13 +36,12 @@
 
 ## 安装环境
 
-- 首先安装的是Pytorch的GPU版本，如果已经安装过了，请跳过。
-
+ - 首先安装的是PaddlePaddle的GPU版本，如果已经安装过了，请跳过。
 ```shell
-conda install pytorch==1.13.1 torchvision==0.14.1 torchaudio==0.13.1 pytorch-cuda=11.6 -c pytorch -c nvidia
+conda install paddlepaddle-gpu==2.4.0 cudatoolkit=10.2 --channel https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/Paddle/
 ```
 
-- 安装mvits库。
+- 安装ppvits库。
 
 使用pip安装，命令如下：
 
@@ -52,8 +52,8 @@ python -m pip install ppvits -U -i https://pypi.tuna.tsinghua.edu.cn/simple
 **建议源码安装**，源码安装能保证使用最新代码。
 
 ```shell
-git clone https://github.com/yeyupiaoling/VITS-Pytorch.git
-cd VITS-Pytorch/
+git clone https://github.com/yeyupiaoling/VITS-PaddlePaddle.git
+cd VITS-PaddlePaddle/
 python setup.py install
 ```
 
@@ -82,7 +82,7 @@ dataset/BZNSYP/Wave/000003.wav|0|p⁼ɑʊ↓↑ma↓↑ pʰeɪ↓k⁼wa↓ p⁼w
 # 单卡训练
 CUDA_VISIBLE_DEVICES=0 python train.py
 # 多卡训练
-CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nnodes=1 --nproc_per_node=2 train.py
+python -m paddle.distributed.launch --gpus '0,1' train.py
 ```
 
 训练输出日志：
@@ -185,4 +185,4 @@ python infer.py --language=简体中文 --text="你好，我是智能语音助�
 
 1. https://github.com/Plachtaa/VITS-fast-fine-tuning
 2. https://github.com/PaddlePaddle/PaddleSpeech
-3. https://github.com/yeyupiaoling/MASR
+3. https://github.com/yeyupiaoling/PPASR
