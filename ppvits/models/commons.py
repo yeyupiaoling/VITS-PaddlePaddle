@@ -4,12 +4,6 @@ import paddle
 from paddle.nn import functional as F
 
 
-def init_weights(m, mean=0.0, std=0.01):
-    class_name = m.__class__.__name__
-    if class_name.find("Conv") != -1:
-        m.weight.data.normal_(mean, std)
-
-
 def get_padding(kernel_size, dilation=1):
     return int((kernel_size * dilation - dilation) / 2)
 
@@ -40,13 +34,13 @@ def rand_gumbel(shape):
 
 
 def rand_gumbel_like(x):
-    g = rand_gumbel(x.size()).to(dtype=x.dtype)
+    g = rand_gumbel(x.shape).astype(x.dtype)
     return g
 
 
 def slice_segments(x, ids_str, segment_size=4):
     ret = paddle.zeros_like(x[:, :, :segment_size])
-    for i in range(x.size(0)):
+    for i in range(x.shape[0]):
         idx_str = ids_str[i]
         idx_end = idx_str + segment_size
         try:
@@ -57,11 +51,11 @@ def slice_segments(x, ids_str, segment_size=4):
 
 
 def rand_slice_segments(x, x_lengths=None, segment_size=4):
-    b, d, t = x.size()
+    b, d, t = x.shape
     if x_lengths is None:
         x_lengths = t
     ids_str_max = x_lengths - segment_size + 1
-    ids_str = (paddle.rand([b]) * ids_str_max).to(dtype=paddle.int64)
+    ids_str = (paddle.rand([b]) * ids_str_max).astype(paddle.int64)
     ret = slice_segments(x, ids_str, segment_size)
     return ret, ids_str
 
@@ -78,20 +72,20 @@ def get_timing_signal_1d(
     scaled_time = position.unsqueeze(0) * inv_timescales.unsqueeze(1)
     signal = paddle.concat([paddle.sin(scaled_time), paddle.cos(scaled_time)], 0)
     signal = F.pad(signal, [0, 0, 0, channels % 2])
-    signal = signal.view(1, channels, length)
+    signal = signal.reshape([1, channels, length])
     return signal
 
 
 def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4):
-    b, channels, length = x.size()
+    b, channels, length = x.shape
     signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale)
-    return x + signal.to(dtype=x.dtype)
+    return x + signal.astype(x.dtype)
 
 
 def cat_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4, axis=1):
-    b, channels, length = x.size()
+    b, channels, length = x.shape
     signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale)
-    return paddle.concat([x, signal.to(dtype=x.dtype)], axis)
+    return paddle.concat([x, signal.astype(x.dtype)], axis)
 
 
 def subsequent_mask(length):
@@ -107,12 +101,6 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
     s_act = paddle.nn.functional.sigmoid(in_act[:, n_channels_int:, :])
     acts = t_act * s_act
     return acts
-
-
-def convert_pad_shape(pad_shape):
-    l = pad_shape[::-1]
-    pad_shape = [item for sublist in l for item in sublist]
-    return pad_shape
 
 
 def shift_1d(x):
@@ -135,9 +123,9 @@ def generate_path(duration, mask):
     b, _, t_y, t_x = mask.shape
     cum_duration = paddle.cumsum(duration, -1)
 
-    cum_duration_flat = cum_duration.view(b * t_x)
-    path = sequence_mask(cum_duration_flat, t_y).to(mask.dtype)
-    path = path.view(b, t_x, t_y)
+    cum_duration_flat = cum_duration.reshape([b * t_x])
+    path = sequence_mask(cum_duration_flat, t_y).astype(mask.dtype)
+    path = path.reshape([b, t_x, t_y])
     path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
     path = path.unsqueeze(1).transpose(2, 3) * mask
     return path
@@ -156,6 +144,7 @@ def clip_grad_value_(parameters, clip_value, norm_type=2):
         param_norm = p.grad.data.norm(norm_type)
         total_norm += param_norm.item() ** norm_type
         if clip_value is not None:
+            # TODO
             p.grad.data.clamp_(min=-clip_value, max=clip_value)
     total_norm = total_norm ** (1. / norm_type)
     return total_norm

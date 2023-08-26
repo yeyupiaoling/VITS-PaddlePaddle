@@ -1,33 +1,44 @@
 import math
 
-import torch
-from torch import nn
-from torch.nn import Conv1d
-from torch.nn import functional as F
-from torch.nn.utils import weight_norm, remove_weight_norm
+import paddle
+from paddle import nn
+from paddle.nn import functional as F
+from paddle.nn.utils import weight_norm, remove_weight_norm
 
+from ppvits.models.commons import get_padding, fused_add_tanh_sigmoid_multiply
 from ppvits.models.transforms import piecewise_rational_quadratic_transform
-from ppvits.models.commons import init_weights, get_padding, fused_add_tanh_sigmoid_multiply
 
 LRELU_SLOPE = 0.1
 
 
-class LayerNorm(nn.Module):
+class LayerNorm(nn.Layer):
     def __init__(self, channels, eps=1e-5):
         super().__init__()
         self.channels = channels
         self.eps = eps
-
-        self.gamma = nn.Parameter(torch.ones(channels))
-        self.beta = nn.Parameter(torch.zeros(channels))
+        self.gamma = paddle.create_parameter(shape=[channels], dtype=paddle.float32,
+                                             default_initializer=paddle.nn.initializer.Assign(
+                                                 paddle.ones(shape=[channels])))
+        self.beta = paddle.create_parameter(shape=[channels], dtype=paddle.float32,
+                                            default_initializer=paddle.nn.initializer.Assign(
+                                                paddle.zeros(shape=[channels])))
 
     def forward(self, x):
+        # TODO
+        perm_18 = list(range(x.ndim))
+        perm_18[1] = -1
+        perm_18[-1] = 1
+        # x = x.transpose(perm=perm_18)
         x = x.transpose(1, -1)
         x = F.layer_norm(x, (self.channels,), self.gamma, self.beta, self.eps)
-        return x.transpose(1, -1)
+        perm_19 = list(range(x.ndim))
+        perm_19[1] = -1
+        perm_19[-1] = 1
+        return x.transpose(perm=perm_19)
+        # return x.transpose(1, -1)
 
 
-class ConvReluNorm(nn.Module):
+class ConvReluNorm(nn.Layer):
     def __init__(self, in_channels, hidden_channels, out_channels, kernel_size, n_layers, p_dropout):
         super().__init__()
         self.in_channels = in_channels
@@ -38,17 +49,15 @@ class ConvReluNorm(nn.Module):
         self.p_dropout = p_dropout
         assert n_layers > 1, "Number of layers should be larger than 0."
 
-        self.conv_layers = nn.ModuleList()
-        self.norm_layers = nn.ModuleList()
-        self.conv_layers.append(nn.Conv1d(in_channels, hidden_channels, kernel_size, padding=kernel_size // 2))
+        self.conv_layers = nn.LayerList()
+        self.norm_layers = nn.LayerList()
+        self.conv_layers.append(nn.Conv1D(in_channels, hidden_channels, kernel_size, padding=kernel_size // 2))
         self.norm_layers.append(LayerNorm(hidden_channels))
-        self.relu_drop = nn.Sequential(
-            nn.ReLU(),
-            nn.Dropout(p_dropout))
+        self.relu_drop = nn.Sequential(nn.ReLU(), nn.Dropout(p_dropout))
         for _ in range(n_layers - 1):
-            self.conv_layers.append(nn.Conv1d(hidden_channels, hidden_channels, kernel_size, padding=kernel_size // 2))
+            self.conv_layers.append(nn.Conv1D(hidden_channels, hidden_channels, kernel_size, padding=kernel_size // 2))
             self.norm_layers.append(LayerNorm(hidden_channels))
-        self.proj = nn.Conv1d(hidden_channels, out_channels, 1)
+        self.proj = nn.Conv1D(hidden_channels, out_channels, 1)
         self.proj.weight.data.zero_()
         self.proj.bias.data.zero_()
 
@@ -62,7 +71,7 @@ class ConvReluNorm(nn.Module):
         return x * x_mask
 
 
-class DDSConv(nn.Module):
+class DDSConv(nn.Layer):
     """
     Dilated and Depth-Separable Convolution
     """
@@ -75,17 +84,16 @@ class DDSConv(nn.Module):
         self.p_dropout = p_dropout
 
         self.drop = nn.Dropout(p_dropout)
-        self.convs_sep = nn.ModuleList()
-        self.convs_1x1 = nn.ModuleList()
-        self.norms_1 = nn.ModuleList()
-        self.norms_2 = nn.ModuleList()
+        self.convs_sep = nn.LayerList()
+        self.convs_1x1 = nn.LayerList()
+        self.norms_1 = nn.LayerList()
+        self.norms_2 = nn.LayerList()
         for i in range(n_layers):
             dilation = kernel_size ** i
             padding = (kernel_size * dilation - dilation) // 2
-            self.convs_sep.append(nn.Conv1d(channels, channels, kernel_size,
-                                            groups=channels, dilation=dilation, padding=padding
-                                            ))
-            self.convs_1x1.append(nn.Conv1d(channels, channels, 1))
+            self.convs_sep.append(nn.Conv1D(channels, channels, kernel_size,
+                                            groups=channels, dilation=dilation, padding=padding))
+            self.convs_1x1.append(nn.Conv1D(channels, channels, 1))
             self.norms_1.append(LayerNorm(channels))
             self.norms_2.append(LayerNorm(channels))
 
@@ -104,7 +112,7 @@ class DDSConv(nn.Module):
         return x * x_mask
 
 
-class WN(torch.nn.Module):
+class WN(paddle.nn.Layer):
     def __init__(self, hidden_channels, kernel_size, dilation_rate, n_layers, gin_channels=0, p_dropout=0):
         super(WN, self).__init__()
         assert (kernel_size % 2 == 1)
@@ -115,20 +123,20 @@ class WN(torch.nn.Module):
         self.gin_channels = gin_channels
         self.p_dropout = p_dropout
 
-        self.in_layers = torch.nn.ModuleList()
-        self.res_skip_layers = torch.nn.ModuleList()
+        self.in_layers = paddle.nn.LayerList()
+        self.res_skip_layers = paddle.nn.LayerList()
         self.drop = nn.Dropout(p_dropout)
 
         if gin_channels != 0:
-            cond_layer = torch.nn.Conv1d(gin_channels, 2 * hidden_channels * n_layers, 1)
-            self.cond_layer = torch.nn.utils.weight_norm(cond_layer, name='weight')
+            cond_layer = paddle.nn.Conv1D(gin_channels, 2 * hidden_channels * n_layers, 1)
+            self.cond_layer = paddle.nn.utils.weight_norm(cond_layer, name='weight')
 
         for i in range(n_layers):
             dilation = dilation_rate ** i
             padding = int((kernel_size * dilation - dilation) / 2)
-            in_layer = torch.nn.Conv1d(hidden_channels, 2 * hidden_channels, kernel_size,
-                                       dilation=dilation, padding=padding)
-            in_layer = torch.nn.utils.weight_norm(in_layer, name='weight')
+            in_layer = paddle.nn.Conv1D(hidden_channels, 2 * hidden_channels, kernel_size,
+                                        dilation=dilation, padding=padding)
+            in_layer = paddle.nn.utils.weight_norm(in_layer, name='weight')
             self.in_layers.append(in_layer)
 
             # last one is not necessary
@@ -137,13 +145,13 @@ class WN(torch.nn.Module):
             else:
                 res_skip_channels = hidden_channels
 
-            res_skip_layer = torch.nn.Conv1d(hidden_channels, res_skip_channels, 1)
-            res_skip_layer = torch.nn.utils.weight_norm(res_skip_layer, name='weight')
+            res_skip_layer = paddle.nn.Conv1D(hidden_channels, res_skip_channels, 1)
+            res_skip_layer = paddle.nn.utils.weight_norm(res_skip_layer, name='weight')
             self.res_skip_layers.append(res_skip_layer)
 
     def forward(self, x, x_mask, g=None, **kwargs):
-        output = torch.zeros_like(x)
-        n_channels_tensor = torch.IntTensor([self.hidden_channels])
+        output = paddle.zeros_like(x)
+        n_channels_tensor = paddle.to_tensor(data=[self.hidden_channels], dtype=paddle.int32)
 
         if g is not None:
             g = self.cond_layer(g)
@@ -154,7 +162,7 @@ class WN(torch.nn.Module):
                 cond_offset = i * 2 * self.hidden_channels
                 g_l = g[:, cond_offset:cond_offset + 2 * self.hidden_channels, :]
             else:
-                g_l = torch.zeros_like(x_in)
+                g_l = paddle.zeros_like(x_in)
 
             acts = fused_add_tanh_sigmoid_multiply(x_in, g_l, n_channels_tensor)
             acts = self.drop(acts)
@@ -170,35 +178,45 @@ class WN(torch.nn.Module):
 
     def remove_weight_norm(self):
         if self.gin_channels != 0:
-            torch.nn.utils.remove_weight_norm(self.cond_layer)
+            paddle.nn.utils.remove_weight_norm(self.cond_layer)
         for l in self.in_layers:
-            torch.nn.utils.remove_weight_norm(l)
+            paddle.nn.utils.remove_weight_norm(l)
         for l in self.res_skip_layers:
-            torch.nn.utils.remove_weight_norm(l)
+            paddle.nn.utils.remove_weight_norm(l)
 
 
-class ResBlock1(torch.nn.Module):
+class ResBlock1(nn.Layer):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3, 5)):
         super(ResBlock1, self).__init__()
-        self.convs1 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[0],
-                               padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[1],
-                               padding=get_padding(kernel_size, dilation[1]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[2],
-                               padding=get_padding(kernel_size, dilation[2])))
+        self.convs1 = nn.LayerList([
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[0],
+                                  padding=get_padding(kernel_size, dilation[0]),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[1],
+                                  padding=get_padding(kernel_size, dilation[1]),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[2],
+                                  padding=get_padding(kernel_size, dilation[2]),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
-        self.convs1.apply(init_weights)
 
-        self.convs2 = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=1,
-                               padding=get_padding(kernel_size, 1)))
+        self.convs2 = nn.LayerList([
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
+                                  padding=get_padding(kernel_size, 1),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
-        self.convs2.apply(init_weights)
 
     def forward(self, x, x_mask=None):
         for c1, c2 in zip(self.convs1, self.convs2):
@@ -222,16 +240,19 @@ class ResBlock1(torch.nn.Module):
             remove_weight_norm(l)
 
 
-class ResBlock2(torch.nn.Module):
+class ResBlock2(paddle.nn.Layer):
     def __init__(self, channels, kernel_size=3, dilation=(1, 3)):
         super(ResBlock2, self).__init__()
-        self.convs = nn.ModuleList([
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[0],
-                               padding=get_padding(kernel_size, dilation[0]))),
-            weight_norm(Conv1d(channels, channels, kernel_size, 1, dilation=dilation[1],
-                               padding=get_padding(kernel_size, dilation[1])))
+        self.convs = nn.LayerList([
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[0],
+                                  padding=get_padding(kernel_size, dilation[0]),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+            weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[1],
+                                  padding=get_padding(kernel_size, dilation[1]),
+                                  weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
-        self.convs.apply(init_weights)
 
     def forward(self, x, x_mask=None):
         for c in self.convs:
@@ -249,46 +270,50 @@ class ResBlock2(torch.nn.Module):
             remove_weight_norm(l)
 
 
-class Log(nn.Module):
+class Log(nn.Layer):
     def forward(self, x, x_mask, reverse=False, **kwargs):
         if not reverse:
-            y = torch.log(torch.clamp_min(x, 1e-5)) * x_mask
-            logdet = torch.sum(-y, [1, 2])
+            y = paddle.log(x=paddle.clip(x=x, min=1e-05)) * x_mask
+            logdet = paddle.sum(-y, [1, 2])
             return y, logdet
         else:
-            x = torch.exp(x) * x_mask
+            x = paddle.exp(x) * x_mask
             return x
 
 
-class Flip(nn.Module):
+class Flip(nn.Layer):
     def forward(self, x, *args, reverse=False, **kwargs):
-        x = torch.flip(x, [1])
+        x = paddle.flip(x, [1])
         if not reverse:
-            logdet = torch.zeros(x.size(0)).to(dtype=x.dtype, device=x.device)
+            logdet = paddle.zeros(x.shape[0]).astype(x.dtype)
             return x, logdet
         else:
             return x
 
 
-class ElementwiseAffine(nn.Module):
+class ElementwiseAffine(nn.Layer):
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
-        self.m = nn.Parameter(torch.zeros(channels, 1))
-        self.logs = nn.Parameter(torch.zeros(channels, 1))
+        self.m = paddle.create_parameter(shape=[channels, 1], dtype=paddle.float32,
+                                         default_initializer=paddle.nn.initializer.Assign(
+                                             paddle.zeros(shape=[channels, 1])))
+        self.logs = paddle.create_parameter(shape=[channels, 1], dtype=paddle.float32,
+                                            default_initializer=paddle.nn.initializer.Assign(
+                                                paddle.zeros(shape=[channels, 1])))
 
     def forward(self, x, x_mask, reverse=False, **kwargs):
         if not reverse:
-            y = self.m + torch.exp(self.logs) * x
+            y = self.m + paddle.exp(self.logs) * x
             y = y * x_mask
-            logdet = torch.sum(self.logs * x_mask, [1, 2])
+            logdet = paddle.sum(self.logs * x_mask, [1, 2])
             return y, logdet
         else:
-            x = (x - self.m) * torch.exp(-self.logs) * x_mask
+            x = (x - self.m) * paddle.exp(-self.logs) * x_mask
             return x
 
 
-class ResidualCouplingLayer(nn.Module):
+class ResidualCouplingLayer(nn.Layer):
     def __init__(self,
                  channels,
                  hidden_channels,
@@ -308,36 +333,37 @@ class ResidualCouplingLayer(nn.Module):
         self.half_channels = channels // 2
         self.mean_only = mean_only
 
-        self.pre = nn.Conv1d(self.half_channels, hidden_channels, 1)
+        self.pre = nn.Conv1D(self.half_channels, hidden_channels, 1)
         self.enc = WN(hidden_channels, kernel_size, dilation_rate, n_layers, p_dropout=p_dropout,
                       gin_channels=gin_channels)
-        self.post = nn.Conv1d(hidden_channels, self.half_channels * (2 - mean_only), 1)
-        self.post.weight.data.zero_()
-        self.post.bias.data.zero_()
+        self.post = nn.Conv1D(hidden_channels, self.half_channels * (2 - mean_only), 1)
+        # TODO
+        # self.post.weight.zero_()
+        # self.post.bias.zero_()
 
     def forward(self, x, x_mask, g=None, reverse=False):
-        x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
+        x0, x1 = paddle.split(x, [self.half_channels] * 2, 1)
         h = self.pre(x0) * x_mask
         h = self.enc(h, x_mask, g=g)
         stats = self.post(h) * x_mask
         if not self.mean_only:
-            m, logs = torch.split(stats, [self.half_channels] * 2, 1)
+            m, logs = paddle.split(stats, [self.half_channels] * 2, 1)
         else:
             m = stats
-            logs = torch.zeros_like(m)
+            logs = paddle.zeros_like(m)
 
         if not reverse:
-            x1 = m + x1 * torch.exp(logs) * x_mask
-            x = torch.cat([x0, x1], 1)
-            logdet = torch.sum(logs, [1, 2])
+            x1 = m + x1 * paddle.exp(logs) * x_mask
+            x = paddle.concat([x0, x1], 1)
+            logdet = paddle.sum(logs, [1, 2])
             return x, logdet
         else:
-            x1 = (x1 - m) * torch.exp(-logs) * x_mask
-            x = torch.cat([x0, x1], 1)
+            x1 = (x1 - m) * paddle.exp(-logs) * x_mask
+            x = paddle.concat([x0, x1], 1)
             return x
 
 
-class ConvFlow(nn.Module):
+class ConvFlow(nn.Layer):
     def __init__(self, in_channels, filter_channels, kernel_size, n_layers, num_bins=10, tail_bound=5.0):
         super().__init__()
         self.in_channels = in_channels
@@ -348,14 +374,15 @@ class ConvFlow(nn.Module):
         self.tail_bound = tail_bound
         self.half_channels = in_channels // 2
 
-        self.pre = nn.Conv1d(self.half_channels, filter_channels, 1)
+        self.pre = nn.Conv1D(self.half_channels, filter_channels, 1)
         self.convs = DDSConv(filter_channels, kernel_size, n_layers, p_dropout=0.)
-        self.proj = nn.Conv1d(filter_channels, self.half_channels * (num_bins * 3 - 1), 1)
-        self.proj.weight.data.zero_()
-        self.proj.bias.data.zero_()
+        self.proj = nn.Conv1D(filter_channels, self.half_channels * (num_bins * 3 - 1), 1)
+        # TODO
+        # self.proj.weight.data.zero_()
+        # self.proj.bias.data.zero_()
 
     def forward(self, x, x_mask, g=None, reverse=False):
-        x0, x1 = torch.split(x, [self.half_channels] * 2, 1)
+        x0, x1 = paddle.split(x, [self.half_channels] * 2, 1)
         h = self.pre(x0)
         h = self.convs(h, x_mask, g=g)
         h = self.proj(h) * x_mask
@@ -376,8 +403,8 @@ class ConvFlow(nn.Module):
                                                                tail_bound=self.tail_bound
                                                                )
 
-        x = torch.cat([x0, x1], 1) * x_mask
-        logdet = torch.sum(logabsdet * x_mask, [1, 2])
+        x = paddle.concat([x0, x1], 1) * x_mask
+        logdet = paddle.sum(logabsdet * x_mask, [1, 2])
         if not reverse:
             return x, logdet
         else:

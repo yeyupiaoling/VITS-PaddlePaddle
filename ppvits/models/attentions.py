@@ -4,7 +4,7 @@ import paddle
 from paddle import nn
 from paddle.nn import functional as F
 
-from ppvits.models import commons
+from ppvits.models.commons import convert_pad_shape, subsequent_mask
 from ppvits.models.modules import LayerNorm
 
 
@@ -85,7 +85,7 @@ class Decoder(nn.Layer):
         x: decoder input
         h: encoder output
         """
-        self_attn_mask = commons.subsequent_mask(x_mask.size(2)).to(device=x.device, dtype=x.dtype)
+        self_attn_mask = subsequent_mask(x_mask.shape[2]).astype(x.dtype)
         encdec_attn_mask = h_mask.unsqueeze(2) * x_mask.unsqueeze(-1)
         x = x * x_mask
         for i in range(self.n_layers):
@@ -138,11 +138,14 @@ class MultiHeadAttention(nn.Layer):
             n_heads_rel = 1 if heads_share else n_heads
             rel_stddev = self.k_channels ** -0.5
             self.emb_rel_k = paddle.create_parameter(
-                shape=paddle.randn([n_heads_rel, window_size * 2 + 1, self.k_channels]) * rel_stddev,
-                dtype=paddle.float32)
+                shape=[n_heads_rel, window_size * 2 + 1, self.k_channels],
+                dtype=paddle.float32,
+                default_initializer=paddle.nn.initializer.Assign(
+                    paddle.randn(shape=[n_heads_rel, window_size * 2 + 1, self.k_channels]) * rel_stddev))
             self.emb_rel_v = paddle.create_parameter(
-                shape=paddle.randn([n_heads_rel, window_size * 2 + 1, self.k_channels]) * rel_stddev,
-                dtype=paddle.float32)
+                shape=[n_heads_rel, window_size * 2 + 1, self.k_channels],
+                dtype=paddle.float32, default_initializer=paddle.nn.initializer.Assign(
+                    paddle.randn(shape=[n_heads_rel, window_size * 2 + 1, self.k_channels]) * rel_stddev))
 
         if proximal_init:
             with paddle.no_grad():
@@ -176,7 +179,7 @@ class MultiHeadAttention(nn.Layer):
             scores = scores + scores_local
         if self.proximal_bias:
             assert t_s == t_t, "Proximal bias is only available for self-attention."
-            scores = scores + self._attention_bias_proximal(t_s).to(device=scores.device, dtype=scores.dtype)
+            scores = scores + self._attention_bias_proximal(t_s).astype(scores.dtype)
         if mask is not None:
             scores = scores.masked_fill(mask == 0, -1e4)
             if self.block_length is not None:
@@ -190,7 +193,7 @@ class MultiHeadAttention(nn.Layer):
             relative_weights = self._absolute_position_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, t_s)
             output = output + self._matmul_with_relative_values(relative_weights, value_relative_embeddings)
-        output = output.transpose([0, 1, 3, 2]).contiguous().view(b, d, t_t)  # [b, n_h, t_t, d_k] -> [b, d, t_t]
+        output = output.transpose([0, 1, 3, 2]).contiguous().reshape([b, d, t_t])  # [b, n_h, t_t, d_k] -> [b, d, t_t]
         return output, p_attn
 
     def _matmul_with_relative_values(self, x, y):
@@ -219,8 +222,7 @@ class MultiHeadAttention(nn.Layer):
         slice_end_position = slice_start_position + 2 * length - 1
         if pad_length > 0:
             padded_relative_embeddings = F.pad(
-                relative_embeddings,
-                commons.convert_pad_shape([[0, 0], [pad_length, pad_length], [0, 0]]))
+                relative_embeddings, convert_pad_shape([[0, 0], [pad_length, pad_length], [0, 0]]))
         else:
             padded_relative_embeddings = relative_embeddings
         used_relative_embeddings = padded_relative_embeddings[:, slice_start_position:slice_end_position]
@@ -231,16 +233,16 @@ class MultiHeadAttention(nn.Layer):
         x: [b, h, l, 2*l-1]
         ret: [b, h, l, l]
         """
-        batch, heads, length, _ = x.size()
+        batch, heads, length, _ = x.shape
         # Concat columns of pad to shift from relative to absolute indexing.
-        x = F.pad(x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
 
         # Concat extra elements so to add up to shape (len+1, 2*len-1).
-        x_flat = x.view([batch, heads, length * 2 * length])
-        x_flat = F.pad(x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [0, length - 1]]))
+        x_flat = x.reshape([batch, heads, length * 2 * length])
+        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [0, length - 1]]))
 
         # Reshape and slice out the padded elements.
-        x_final = x_flat.view([batch, heads, length + 1, 2 * length - 1])[:, :, :length, length - 1:]
+        x_final = x_flat.reshape([batch, heads, length + 1, 2 * length - 1])[:, :, :length, length - 1:]
         return x_final
 
     def _absolute_position_to_relative_position(self, x):
@@ -248,13 +250,13 @@ class MultiHeadAttention(nn.Layer):
         x: [b, h, l, l]
         ret: [b, h, l, 2*l-1]
         """
-        batch, heads, length, _ = x.size()
+        batch, heads, length, _ = x.shape
         # padd along column
-        x = F.pad(x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
-        x_flat = x.view([batch, heads, length ** 2 + length * (length - 1)])
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
+        x_flat = x.reshape([batch, heads, length ** 2 + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
-        x_flat = F.pad(x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
-        x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]
+        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
+        x_final = x_flat.reshape([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
     def _attention_bias_proximal(self, length):
@@ -306,7 +308,7 @@ class FFN(nn.Layer):
         pad_l = self.kernel_size - 1
         pad_r = 0
         padding = [[0, 0], [0, 0], [pad_l, pad_r]]
-        x = F.pad(x, commons.convert_pad_shape(padding))
+        x = F.pad(x, convert_pad_shape(padding))
         return x
 
     def _same_padding(self, x):
@@ -315,5 +317,5 @@ class FFN(nn.Layer):
         pad_l = (self.kernel_size - 1) // 2
         pad_r = self.kernel_size // 2
         padding = [[0, 0], [0, 0], [pad_l, pad_r]]
-        x = F.pad(x, commons.convert_pad_shape(padding))
+        x = F.pad(x, convert_pad_shape(padding))
         return x

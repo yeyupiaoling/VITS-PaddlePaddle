@@ -17,7 +17,7 @@ class TextAudioSpeakerCollate(object):
         # Right zero-pad all one-hot text sequences to max input length
         ids_sorted_decreasing = paddle.argsort(paddle.to_tensor([x[1].shape[1] for x in batch], dtype=paddle.int64),
                                                axis=0, descending=True)
-
+        # TODO
         max_text_len = max([len(x[0]) for x in batch])
         max_spec_len = max([x[1].shape[1] for x in batch])
         max_wav_len = max([x[2].shape[1] for x in batch])

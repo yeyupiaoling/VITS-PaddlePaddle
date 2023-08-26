@@ -1,15 +1,15 @@
 import math
 
-import monotonic_align
+import monotonic_align_paddle
 import paddle
 from paddle import nn
-from paddle.nn import Conv1D, ConvTranspose1d, Conv2D
+from paddle.nn import Conv1D, Conv2D, Conv1DTranspose
 from paddle.nn import functional as F
 from paddle.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 
 from ppvits.models import attentions
 from ppvits.models import modules
-from ppvits.models.commons import init_weights, get_padding, sequence_mask, rand_slice_segments, generate_path
+from ppvits.models.commons import get_padding, sequence_mask, rand_slice_segments, generate_path
 
 
 class StochasticDurationPredictor(nn.Layer):
@@ -46,10 +46,10 @@ class StochasticDurationPredictor(nn.Layer):
             self.cond = nn.Conv1D(gin_channels, filter_channels, 1)
 
     def forward(self, x, x_mask, w=None, g=None, reverse=False, noise_scale=1.0):
-        x = torch.detach(x)
+        x = x.detach()
         x = self.pre(x)
         if g is not None:
-            g = torch.detach(g)
+            g = g.detach()
             x = x + self.cond(g)
         x = self.convs(x, x_mask)
         x = self.proj(x) * x_mask
@@ -62,7 +62,7 @@ class StochasticDurationPredictor(nn.Layer):
             h_w = self.post_pre(w)
             h_w = self.post_convs(h_w, x_mask)
             h_w = self.post_proj(h_w) * x_mask
-            e_q = paddle.randn(w.size(0), 2, w.size(2)).to(device=x.device, dtype=x.dtype) * x_mask
+            e_q = paddle.randn(w.shape[0], 2, w.shape[2]).astype(x.dtype) * x_mask
             z_q = e_q
             for flow in self.post_flows:
                 z_q, logdet_q = flow(z_q, x_mask, g=(x + h_w))
@@ -70,7 +70,7 @@ class StochasticDurationPredictor(nn.Layer):
             z_u, z1 = paddle.split(z_q, num_or_sections=[1, 1], axis=1)
             u = paddle.nn.functional.sigmoid(z_u) * x_mask
             z0 = (w - u) * x_mask
-            logdet_tot_q += paddle.sum((F.logsigmoid(z_u) + F.logsigmoid(-z_u)) * x_mask, [1, 2])
+            logdet_tot_q += paddle.sum((F.log_sigmoid(z_u) + F.log_sigmoid(-z_u)) * x_mask, [1, 2])
             logq = paddle.sum(-0.5 * (math.log(2 * math.pi) + (e_q ** 2)) * x_mask, [1, 2]) - logdet_tot_q
 
             logdet_tot = 0
@@ -85,7 +85,7 @@ class StochasticDurationPredictor(nn.Layer):
         else:
             flows = list(reversed(self.flows))
             flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
-            z = paddle.randn(x.size(0), 2, x.size(2)).to(device=x.device, dtype=x.dtype) * noise_scale
+            z = paddle.randn(x.shape[0], 2, x.shape[2]).astype(x.dtype) * noise_scale
             for flow in flows:
                 z = flow(z, x_mask, g=x, reverse=reverse)
             z0, z1 = paddle.split(z, [1, 1], 1)
@@ -114,9 +114,9 @@ class DurationPredictor(nn.Layer):
             self.cond = nn.Conv1D(gin_channels, in_channels, 1)
 
     def forward(self, x, x_mask, g=None):
-        x = torch.detach(x)
+        x = x.detach()
         if g is not None:
-            g = torch.detach(g)
+            g = g.detach()
             x = x + self.cond(g)
         x = self.conv_1(x * x_mask)
         x = paddle.nn.functional.relu(x)
@@ -166,7 +166,7 @@ class TextEncoder(nn.Layer):
     def forward(self, x, x_lengths):
         x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
         x = paddle.transpose(x, [0, 2, 1])  # [b, h, t]
-        x_mask = paddle.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        x_mask = paddle.unsqueeze(sequence_mask(x_lengths, x.shape[2]), 1).astype(x.dtype)
 
         x = self.encoder(x * x_mask, x_mask)
         stats = self.proj(x) * x_mask
@@ -233,11 +233,10 @@ class PosteriorEncoder(nn.Layer):
         self.proj = nn.Conv1D(hidden_channels, out_channels * 2, 1)
 
     def forward(self, x, x_lengths, g=None):
-        x_mask = paddle.unsqueeze(sequence_mask(x_lengths, x.size(2)), 1).to(x.dtype)
+        x_mask = paddle.unsqueeze(sequence_mask(x_lengths, x.shape[2]), 1).astype(x.dtype)
         x = self.pre(x) * x_mask
         x = self.enc(x, x_mask, g=g)
         stats = self.proj(x) * x_mask
-        # TODO
         m, logs = paddle.split(x=stats, num_or_sections=stats.shape[1] // self.out_channels, axis=1)
         z = (m + paddle.randn(m.shape, dtype=m.dtype) * paddle.exp(logs)) * x_mask
         return z, m, logs, x_mask
@@ -255,8 +254,10 @@ class Generator(nn.Layer):
         self.ups = nn.LayerList()
         for i, (u, k) in enumerate(zip(upsample_rates, upsample_kernel_sizes)):
             self.ups.append(weight_norm(
-                ConvTranspose1d(upsample_initial_channel // (2 ** i), upsample_initial_channel // (2 ** (i + 1)),
-                                k, u, padding=(k - u) // 2)))
+                Conv1DTranspose(upsample_initial_channel // (2 ** i), upsample_initial_channel // (2 ** (i + 1)),
+                                k, u, padding=(k - u) // 2,
+                                weight_attr=paddle.framework.ParamAttr(
+                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))))
 
         self.resblocks = nn.LayerList()
         for i in range(len(self.ups)):
@@ -265,7 +266,6 @@ class Generator(nn.Layer):
                 self.resblocks.append(resblock(ch, k, d))
 
         self.conv_post = nn.Conv1D(ch, 1, 7, 1, padding=3)
-        self.ups.apply(init_weights)
 
         if gin_channels != 0:
             self.cond = nn.Conv1D(gin_channels, upsample_initial_channel, 1)
@@ -323,7 +323,7 @@ class DiscriminatorP(nn.Layer):
             n_pad = self.period - (t % self.period)
             x = F.pad(x, (0, n_pad), "reflect")
             t = t + n_pad
-        x = x.view(b, c, t // self.period, self.period)
+        x = x.reshape([b, c, t // self.period, self.period])
 
         for l in self.convs:
             x = l(x)
@@ -483,7 +483,7 @@ class SynthesizerTrn(nn.Layer):
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
 
             attn_mask = paddle.unsqueeze(x_mask, 2) * paddle.unsqueeze(y_mask, -1)
-            attn = monotonic_align.maximum_path(neg_cent, attn_mask.squeeze(1)).unsqueeze(1).detach()
+            attn = monotonic_align_paddle.maximum_path(neg_cent, attn_mask.squeeze(1)).unsqueeze(1).detach()
 
         w = attn.sum(2)
         if self.use_sdp:
@@ -516,7 +516,7 @@ class SynthesizerTrn(nn.Layer):
         w = paddle.exp(logw) * x_mask * length_scale
         w_ceil = paddle.ceil(w)
         y_lengths = paddle.clip(x=paddle.sum(x=w_ceil, axis=[1, 2]), min=1).astype(dtype=paddle.int64)
-        y_mask = paddle.unsqueeze(sequence_mask(y_lengths, None), 1).to(x_mask.dtype)
+        y_mask = paddle.unsqueeze(sequence_mask(y_lengths, None), 1).astype(x_mask.dtype)
         attn_mask = paddle.unsqueeze(x_mask, 2) * paddle.unsqueeze(y_mask, -1)
         attn = generate_path(w_ceil, attn_mask)
 

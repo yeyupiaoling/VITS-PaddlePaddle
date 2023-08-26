@@ -1,19 +1,19 @@
 import os
-import os
 import platform
 import shutil
 
 import paddle
 import yaml
 from paddle.distributed import fleet
-from paddle.io import DataLoader, DistributedBatchSampler
+from paddle.io import DataLoader
 from paddle.nn import functional as F
 from tqdm import tqdm
 from visualdl import LogWriter
 
 from ppvits.data_utils.collate_fn import TextAudioSpeakerCollate
-from ppvits.data_utils.mel_processing import mel_spectrogram_torch, spec_to_mel_torch
+from ppvits.data_utils.mel_processing import mel_spectrogram_paddle, spec_to_mel_paddle
 from ppvits.data_utils.reader import TextAudioSpeakerLoader
+from ppvits.data_utils.sampler import DistributedBucketSampler
 from ppvits.models.commons import clip_grad_value_, slice_segments
 from ppvits.models.losses import generator_loss, discriminator_loss, feature_loss, kl_loss
 from ppvits.models.models import SynthesizerTrn, MultiPeriodDiscriminator
@@ -49,9 +49,12 @@ class PPVITSTrainer(object):
         train_dataset = TextAudioSpeakerLoader(self.configs.data.training_files, self.configs.data, self.symbols)
         train_sampler = None
         if n_gpus > 1:
-            train_sampler = DistributedBatchSampler(dataset=train_dataset,
-                                                    batch_size=self.configs.dataset_conf.dataLoader.batch_size,
-                                                    shuffle=True)
+            train_sampler = DistributedBucketSampler(train_dataset,
+                                                     self.configs.train.batch_size,
+                                                     [32, 300, 400, 500, 600, 700, 800, 900, 1000],
+                                                     num_replicas=n_gpus,
+                                                     rank=rank,
+                                                     shuffle=True)
         collate_fn = TextAudioSpeakerCollate()
         self.train_loader = DataLoader(train_dataset, num_workers=self.configs.data.num_workers,
                                        shuffle=(train_sampler is None), collate_fn=collate_fn,
@@ -195,21 +198,21 @@ class PPVITSTrainer(object):
                 y_hat, l_length, attn, ids_slice, x_mask, z_mask, \
                     (z, z_p, m_p, logs_p, m_q, logs_q) = self.net_g(x, x_lengths, spec, spec_lengths, speakers)
 
-                mel = spec_to_mel_torch(spec,
-                                        self.configs.data.filter_length,
-                                        self.configs.data.n_mel_channels,
-                                        self.configs.data.sampling_rate,
-                                        self.configs.data.mel_fmin,
-                                        self.configs.data.mel_fmax)
+                mel = spec_to_mel_paddle(spec,
+                                         self.configs.data.filter_length,
+                                         self.configs.data.n_mel_channels,
+                                         self.configs.data.sampling_rate,
+                                         self.configs.data.mel_fmin,
+                                         self.configs.data.mel_fmax)
                 y_mel = slice_segments(mel, ids_slice, self.configs.train.segment_size // self.configs.data.hop_length)
-                y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1),
-                                                  self.configs.data.filter_length,
-                                                  self.configs.data.n_mel_channels,
-                                                  self.configs.data.sampling_rate,
-                                                  self.configs.data.hop_length,
-                                                  self.configs.data.win_length,
-                                                  self.configs.data.mel_fmin,
-                                                  self.configs.data.mel_fmax)
+                y_hat_mel = mel_spectrogram_paddle(y_hat.squeeze(1),
+                                                   self.configs.data.filter_length,
+                                                   self.configs.data.n_mel_channels,
+                                                   self.configs.data.sampling_rate,
+                                                   self.configs.data.hop_length,
+                                                   self.configs.data.win_length,
+                                                   self.configs.data.mel_fmin,
+                                                   self.configs.data.mel_fmax)
 
                 y = slice_segments(y, ids_slice * self.configs.data.hop_length, self.configs.train.segment_size)
 
@@ -273,20 +276,20 @@ class PPVITSTrainer(object):
             y_hat, attn, mask, *_ = eval_generator.infer(x, x_lengths, speakers, max_len=1000)
             y_hat_lengths = mask.sum([1, 2]).long() * self.configs.data.hop_length
 
-            mel = spec_to_mel_torch(spec,
-                                    self.configs.data.filter_length,
-                                    self.configs.data.n_mel_channels,
-                                    self.configs.data.sampling_rate,
-                                    self.configs.data.mel_fmin,
-                                    self.configs.data.mel_fmax)
-            y_hat_mel = mel_spectrogram_torch(y_hat.squeeze(1).float(),
-                                              self.configs.data.filter_length,
-                                              self.configs.data.n_mel_channels,
-                                              self.configs.data.sampling_rate,
-                                              self.configs.data.hop_length,
-                                              self.configs.data.win_length,
-                                              self.configs.data.mel_fmin,
-                                              self.configs.data.mel_fmax)
+            mel = spec_to_mel_paddle(spec,
+                                     self.configs.data.filter_length,
+                                     self.configs.data.n_mel_channels,
+                                     self.configs.data.sampling_rate,
+                                     self.configs.data.mel_fmin,
+                                     self.configs.data.mel_fmax)
+            y_hat_mel = mel_spectrogram_paddle(y_hat.squeeze(1).float(),
+                                               self.configs.data.filter_length,
+                                               self.configs.data.n_mel_channels,
+                                               self.configs.data.sampling_rate,
+                                               self.configs.data.hop_length,
+                                               self.configs.data.win_length,
+                                               self.configs.data.mel_fmin,
+                                               self.configs.data.mel_fmax)
         image_dict = {"gen/mel": plot_spectrogram_to_numpy(y_hat_mel[0].numpy())}
         audio_dict = {"gen/audio": y_hat[0, :, :y_hat_lengths[0]]}
         image_dict.update({"gt/mel": plot_spectrogram_to_numpy(mel[0].numpy())})

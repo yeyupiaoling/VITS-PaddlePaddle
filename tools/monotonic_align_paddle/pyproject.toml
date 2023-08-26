@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools==67.4.0", "setuptools-scm[toml]==7.1.0", "Cython==0.29.33"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monotonic_align_paddle"
+authors = [
+    {name = "Moonsik Park", email = "moonsik.park@estsoft.com"},
+]
+description = "Monotonic Alignment Search module"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Cython",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dynamic = ["version"]
+
+
+[project.urls]
+repository = "https://github.com/moonsikpark/monotonic_align"
+
+[tool.setuptools]
+include-package-data = false
+
+[tool.setuptools_scm]
+
+[tool.setuptools.packages.find]
+where = ["src"]
