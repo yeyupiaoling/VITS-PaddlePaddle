@@ -3,6 +3,7 @@ pretrained_model/
 output/
 dataset/
 log/
+models/
 build/
 dist/
 ppvits.egg-info/
