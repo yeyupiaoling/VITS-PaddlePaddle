@@ -4,7 +4,6 @@ import paddle
 import yaml
 from paddle import no_grad
 
-from ppvits.models import commons
 from ppvits.models.commons import intersperse
 from ppvits.models.models import SynthesizerTrn
 from ppvits.text import text_to_sequence, get_symbols
