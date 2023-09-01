@@ -520,9 +520,8 @@ class SynthesizerTrn(nn.Layer):
         attn_mask = paddle.unsqueeze(x_mask, 2) * paddle.unsqueeze(y_mask, -1)
         attn = generate_path(w_ceil, attn_mask)
 
-        m_p = paddle.matmul(attn.squeeze(1), m_p.transpose(1, 2)).transpose(1, 2)  # [b, t', t], [b, t, d] -> [b, d, t']
-        logs_p = paddle.matmul(attn.squeeze(1), logs_p.transpose(1, 2)).transpose(1,
-                                                                                  2)  # [b, t', t], [b, t, d] -> [b, d, t']
+        m_p = paddle.matmul(attn.squeeze(1), m_p.transpose([0, 2, 1])).transpose([0, 2, 1])  # [b, t', t], [b, t, d] -> [b, d, t']
+        logs_p = paddle.matmul(attn.squeeze(1), logs_p.transpose([0, 2, 1])).transpose([0, 2, 1])  # [b, t', t], [b, t, d] -> [b, d, t']
 
         z_p = m_p + paddle.randn(shape=m_p.shape, dtype=m_p.dtype) * paddle.exp(logs_p) * noise_scale
         z = self.flow(z_p, y_mask, g=g, reverse=True)

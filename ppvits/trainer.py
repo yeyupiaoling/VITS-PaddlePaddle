@@ -385,9 +385,9 @@ class PPVITSTrainer(object):
                                                    self.configs.dataset_conf.mel_fmax)
                 # 记录数据
                 image_dict = {f"gen/mel_{i}": plot_spectrogram_to_numpy(y_hat_mel[0].numpy())}
-                audio_dict = {f"gen/audio_{i}": y_hat[0, :, :y_hat_lengths[0]]}
+                audio_dict = {f"gen/audio_{i}": y_hat[0, :, :y_hat_lengths[0]].numpy()}
                 image_dict.update({f"gt/mel_{i}": plot_spectrogram_to_numpy(mel[0].numpy())})
-                audio_dict.update({f"gt/audio_{i}": y1[0, :, :y_length[0]]})
+                audio_dict.update({f"gt/audio_{i}": y1[0, :, :y_length[0]].numpy()})
                 # 可视化
                 for k, v in image_dict.items():
                     writer.add_image(k, v, epoch, dataformats='HWC')

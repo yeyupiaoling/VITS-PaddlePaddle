@@ -128,7 +128,7 @@ def generate_path(duration, mask):
     path = sequence_mask(cum_duration_flat, t_y).astype(mask.dtype)
     path = path.reshape([b, t_x, t_y])
     path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
-    path = path.unsqueeze(1).transpose(2, 3) * mask
+    path = path.unsqueeze(1).transpose([0, 1, 3, 2]) * mask
     return path
 
 
