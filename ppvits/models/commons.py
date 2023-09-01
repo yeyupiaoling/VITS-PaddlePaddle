@@ -1,4 +1,5 @@
 import math
+from typing import Union
 
 import paddle
 from paddle.nn import functional as F
@@ -71,7 +72,7 @@ def get_timing_signal_1d(
         paddle.arange(num_timescales, dtype=paddle.float32) * -log_timescale_increment)
     scaled_time = position.unsqueeze(0) * inv_timescales.unsqueeze(1)
     signal = paddle.concat([paddle.sin(scaled_time), paddle.cos(scaled_time)], 0)
-    signal = F.pad(signal, [0, 0, 0, channels % 2])
+    signal = F.pad(signal, [0, channels % 2])
     signal = signal.reshape([1, channels, length])
     return signal
 
@@ -141,10 +142,35 @@ def clip_grad_value_(parameters, clip_value, norm_type=2):
 
     total_norm = 0
     for p in parameters:
-        param_norm = p.grad.data.norm(norm_type)
+        param_norm = p.grad.norm(norm_type)
         total_norm += param_norm.item() ** norm_type
         if clip_value is not None:
             # TODO
-            p.grad.data.clamp_(min=-clip_value, max=clip_value)
+            p.grad.clamp_(min=-clip_value, max=clip_value)
     total_norm = total_norm ** (1. / norm_type)
     return total_norm
+
+
+def broadcast_shape(shp1, shp2):
+    result = []
+    for a, b in zip(shp1[::-1], shp2[::-1]):
+        result.append(max(a, b))
+    return result[::-1]
+
+
+def masked_fill(xs: paddle.Tensor,
+                mask: paddle.Tensor,
+                value: Union[float, int]):
+    # will be nan when value is `inf`.
+    # mask = mask.astype(xs.dtype)
+    # return xs * (1.0 - mask) + mask * value
+
+    bshape = broadcast_shape(xs.shape, mask.shape)
+    mask.stop_gradient = True
+    # tmp = paddle.ones(shape=[len(bshape)], dtype='int32')
+    # for index in range(len(bshape)):
+    #     tmp[index] = bshape[index]
+    mask = mask.broadcast_to(bshape)
+    trues = paddle.full_like(xs, fill_value=value)
+    xs = paddle.where(mask, trues, xs)
+    return xs

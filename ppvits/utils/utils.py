@@ -10,25 +10,21 @@ from ppvits.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-def load_checkpoint(checkpoint_path, model, optimizer=None, drop_speaker_emb=False):
+def load_checkpoint(checkpoint_path, model, optimizer=None, drop_speaker_emb=False, is_pretrained=False):
     assert os.path.isfile(checkpoint_path)
     checkpoint_dict = paddle.load(checkpoint_path)
     epoch = checkpoint_dict.get('epoch', 0)
     version = checkpoint_dict.get('version', 0)
     learning_rate = checkpoint_dict['learning_rate']
     if optimizer is not None:
-        optimizer.load_state_dict(checkpoint_dict['optimizer'])
+        optimizer.set_state_dict(checkpoint_dict['optimizer'])
     saved_state_dict = checkpoint_dict['model']
-    if hasattr(model, 'module'):
-        state_dict = model.module.state_dict()
-    else:
-        state_dict = model.state_dict()
+    state_dict = model.state_dict()
     new_state_dict = {}
     for k, v in state_dict.items():
         try:
-            if k == 'emb_g.weight':
+            if k == 'emb_g.weight' or k == 'enc_p.emb.weight':
                 if drop_speaker_emb:
-                    new_state_dict[k] = v
                     continue
                 v[:saved_state_dict[k].shape[0], :] = saved_state_dict[k]
                 new_state_dict[k] = v
@@ -37,27 +33,22 @@ def load_checkpoint(checkpoint_path, model, optimizer=None, drop_speaker_emb=Fal
         except:
             logger.info("%s is not in the checkpoint" % k)
             new_state_dict[k] = v
-    if hasattr(model, 'module'):
-        model.module.load_state_dict(new_state_dict)
-    else:
-        model.load_state_dict(new_state_dict)
+    model.set_state_dict(new_state_dict)
     logger.info(f"Loaded checkpoint '{checkpoint_path}' (epoch {epoch}, version {version})")
     return model, optimizer, learning_rate, epoch
 
 
 # 保存模型
-def save_checkpoint(model, optimizer, learning_rate, epoch, checkpoint_path, speakers=None):
+def save_checkpoint(model, optimizer, learning_rate, epoch, checkpoint_path, speakers, text_cleaner):
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
     if hasattr(model, 'module'):
         state_dict = model.module.state_dict()
     else:
         state_dict = model.state_dict()
-    paddle.save({'model': state_dict,
-                 'epoch': epoch,
-                 'optimizer': optimizer.state_dict() if optimizer is not None else None,
-                 'speakers': speakers,
-                 'version': __version__,
+    paddle.save({'model': state_dict, 'optimizer': optimizer.state_dict() if optimizer is not None else None,
+                 'epoch': epoch, 'text_cleaner': text_cleaner, 'speakers': speakers, 'version': __version__,
                  'learning_rate': learning_rate}, checkpoint_path)
+    logger.info(f"Save checkpoint '{checkpoint_path}' (epoch {epoch})")
 
 
 def plot_spectrogram_to_numpy(spectrogram):

@@ -62,7 +62,7 @@ class StochasticDurationPredictor(nn.Layer):
             h_w = self.post_pre(w)
             h_w = self.post_convs(h_w, x_mask)
             h_w = self.post_proj(h_w) * x_mask
-            e_q = paddle.randn(w.shape[0], 2, w.shape[2]).astype(x.dtype) * x_mask
+            e_q = paddle.randn((w.shape[0], 2, w.shape[2])).astype(x.dtype) * x_mask
             z_q = e_q
             for flow in self.post_flows:
                 z_q, logdet_q = flow(z_q, x_mask, g=(x + h_w))
@@ -85,7 +85,7 @@ class StochasticDurationPredictor(nn.Layer):
         else:
             flows = list(reversed(self.flows))
             flows = flows[:-2] + [flows[-1]]  # remove a useless vflow
-            z = paddle.randn(x.shape[0], 2, x.shape[2]).astype(x.dtype) * noise_scale
+            z = paddle.randn((x.shape[0], 2, x.shape[2])).astype(x.dtype) * noise_scale
             for flow in flows:
                 z = flow(z, x_mask, g=x, reverse=reverse)
             z0, z1 = paddle.split(z, [1, 1], 1)
@@ -321,7 +321,7 @@ class DiscriminatorP(nn.Layer):
         b, c, t = x.shape
         if t % self.period != 0:  # pad first
             n_pad = self.period - (t % self.period)
-            x = F.pad(x, (0, n_pad), "reflect")
+            x = F.pad(x, (0, n_pad), "reflect", data_format='NCL')
             t = t + n_pad
         x = x.reshape([b, c, t // self.period, self.period])
 
@@ -475,10 +475,10 @@ class SynthesizerTrn(nn.Layer):
             # negative cross-entropy
             s_p_sq_r = paddle.exp(-2 * logs_p)  # [b, d, t]
             neg_cent1 = paddle.sum(-0.5 * math.log(2 * math.pi) - logs_p, [1], keepdim=True)  # [b, 1, t_s]
-            neg_cent2 = paddle.matmul(-0.5 * (z_p ** 2).transpose(1, 2),
-                                      s_p_sq_r)  # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
-            neg_cent3 = paddle.matmul(z_p.transpose(1, 2),
-                                      (m_p * s_p_sq_r))  # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
+            # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
+            neg_cent2 = paddle.matmul(-0.5 * (z_p ** 2).transpose([0, 2, 1]), s_p_sq_r)
+            # [b, t_t, d] x [b, d, t_s] = [b, t_t, t_s]
+            neg_cent3 = paddle.matmul(z_p.transpose([0, 2, 1]), (m_p * s_p_sq_r))
             neg_cent4 = paddle.sum(-0.5 * (m_p ** 2) * s_p_sq_r, [1], keepdim=True)  # [b, 1, t_s]
             neg_cent = neg_cent1 + neg_cent2 + neg_cent3 + neg_cent4
 
@@ -495,8 +495,8 @@ class SynthesizerTrn(nn.Layer):
             l_length = paddle.sum((logw - logw_) ** 2, [1, 2]) / paddle.sum(x_mask)  # for averaging
 
         # expand prior
-        m_p = paddle.matmul(attn.squeeze(1), m_p.transpose(1, 2)).transpose(1, 2)
-        logs_p = paddle.matmul(attn.squeeze(1), logs_p.transpose(1, 2)).transpose(1, 2)
+        m_p = paddle.matmul(attn.squeeze(1), m_p.transpose([0, 2, 1])).transpose([0, 2, 1])
+        logs_p = paddle.matmul(attn.squeeze(1), logs_p.transpose([0, 2, 1])).transpose([0, 2, 1])
 
         z_slice, ids_slice = rand_slice_segments(z, y_lengths, self.segment_size)
         o = self.dec(z_slice, g=g)

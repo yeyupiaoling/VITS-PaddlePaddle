@@ -38,10 +38,10 @@ hann_window = {}
 
 
 def spectrogram_paddle(y, n_fft, sampling_rate, hop_size, win_size, center=False):
-    if paddle.min(y) < -1.:
-        print('min value is ', paddle.min(y))
-    if paddle.max(y) > 1.:
-        print('max value is ', paddle.max(y))
+    # if paddle.min(y) < -1.:
+    #     print('min value is ', paddle.min(y))
+    # if paddle.max(y) > 1.:
+    #     print('max value is ', paddle.max(y))
 
     global hann_window
     wnsize_dtype = str(win_size)
@@ -62,7 +62,7 @@ def spectrogram_paddle(y, n_fft, sampling_rate, hop_size, win_size, center=False
 
 def spec_to_mel_paddle(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
     global mel_basis
-    dtype_device = str(spec.dtype) + '_' + str(spec.device)
+    dtype_device = str(spec.dtype)
     fmax_dtype_device = str(fmax) + '_' + dtype_device
     if fmax_dtype_device not in mel_basis:
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
@@ -85,12 +85,14 @@ def mel_spectrogram_paddle(y, n_fft, num_mels, sampling_rate, hop_size, win_size
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=n_fft, n_mels=num_mels, fmin=fmin, fmax=fmax)
         mel_basis[fmax_dtype] = paddle.to_tensor(mel, dtype=y.dtype)
     if wnsize_dtype not in hann_window:
-        hann_window[wnsize_dtype] = paddle.to_tensor(win_size, dtype=y.dtype)
+        hann_window[wnsize_dtype] = paddle.audio.functional.get_window(window='hann', win_length=win_size,
+                                                                       dtype=y.dtype)
 
-    y = F.pad(y.unsqueeze(1), (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)), mode='reflect')
+    y = F.pad(y.unsqueeze(1), (int((n_fft - hop_size) / 2), int((n_fft - hop_size) / 2)), mode='reflect',
+              data_format='NCL')
     y = y.squeeze(1)
 
-    spec = paddle.signal.stft(y.float(), n_fft, hop_length=hop_size, win_length=win_size,
+    spec = paddle.signal.stft(y.astype(paddle.float32), n_fft, hop_length=hop_size, win_length=win_size,
                               window=hann_window[wnsize_dtype], center=center, pad_mode='reflect',
                               normalized=False, onesided=True)
     spec = paddle.as_real(spec)

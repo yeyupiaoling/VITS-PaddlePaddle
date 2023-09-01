@@ -58,7 +58,7 @@ def unconstrained_rational_quadratic_spline(inputs,
     logabsdet = paddle.zeros_like(inputs)
 
     if tails == 'linear':
-        unnormalized_derivatives = F.pad(unnormalized_derivatives, pad=(1, 1))
+        unnormalized_derivatives = F.pad(unnormalized_derivatives, pad=(1, 1, 0, 0))
         constant = np.log(np.exp(1 - min_derivative) - 1)
         unnormalized_derivatives[..., 0] = constant
         unnormalized_derivatives[..., -1] = constant
@@ -67,18 +67,17 @@ def unconstrained_rational_quadratic_spline(inputs,
         logabsdet[outside_interval_mask] = 0
     else:
         raise RuntimeError('{} tails are not implemented.'.format(tails))
-
-    outputs[inside_interval_mask], logabsdet[inside_interval_mask] = rational_quadratic_spline(
-        inputs=inputs[inside_interval_mask],
-        unnormalized_widths=unnormalized_widths[inside_interval_mask, :],
-        unnormalized_heights=unnormalized_heights[inside_interval_mask, :],
-        unnormalized_derivatives=unnormalized_derivatives[inside_interval_mask, :],
-        inverse=inverse,
-        left=-tail_bound, right=tail_bound, bottom=-tail_bound, top=tail_bound,
-        min_bin_width=min_bin_width,
-        min_bin_height=min_bin_height,
-        min_derivative=min_derivative)
-
+    # TODO
+    o, l = rational_quadratic_spline(inputs=inputs[inside_interval_mask],
+                                     unnormalized_widths=unnormalized_widths[inside_interval_mask],
+                                     unnormalized_heights=unnormalized_heights[inside_interval_mask],
+                                     unnormalized_derivatives=unnormalized_derivatives[inside_interval_mask],
+                                     inverse=inverse,
+                                     left=-tail_bound, right=tail_bound, bottom=-tail_bound, top=tail_bound,
+                                     min_bin_width=min_bin_width,
+                                     min_bin_height=min_bin_height,
+                                     min_derivative=min_derivative)
+    outputs[inside_interval_mask], logabsdet[inside_interval_mask] = o, l
     return outputs, logabsdet
 
 
@@ -104,7 +103,7 @@ def rational_quadratic_spline(inputs,
     widths = F.softmax(unnormalized_widths, axis=-1)
     widths = min_bin_width + (1 - min_bin_width * num_bins) * widths
     cumwidths = paddle.cumsum(widths, axis=-1)
-    cumwidths = F.pad(cumwidths, pad=(1, 0), mode='constant', value=0.0)
+    cumwidths = F.pad(cumwidths.unsqueeze(0), pad=(1, 0), mode='constant', value=0.0, data_format="NCL").squeeze(0)
     cumwidths = (right - left) * cumwidths + left
     cumwidths[..., 0] = left
     cumwidths[..., -1] = right
@@ -115,7 +114,7 @@ def rational_quadratic_spline(inputs,
     heights = F.softmax(unnormalized_heights, axis=-1)
     heights = min_bin_height + (1 - min_bin_height * num_bins) * heights
     cumheights = paddle.cumsum(heights, axis=-1)
-    cumheights = F.pad(cumheights, pad=(1, 0), mode='constant', value=0.0)
+    cumheights = F.pad(cumheights.unsqueeze(0), pad=(1, 0), mode='constant', value=0.0, data_format="NCL").squeeze(0)
     cumheights = (top - bottom) * cumheights + bottom
     cumheights[..., 0] = bottom
     cumheights[..., -1] = top
@@ -126,17 +125,17 @@ def rational_quadratic_spline(inputs,
     else:
         bin_idx = searchsorted(cumwidths, inputs)[..., None]
 
-    input_cumwidths = cumwidths.gather(-1, bin_idx)[..., 0]
-    input_bin_widths = widths.gather(-1, bin_idx)[..., 0]
+    input_cumwidths = cumwidths.take_along_axis(bin_idx, -1)[..., 0]
+    input_bin_widths = widths.take_along_axis(bin_idx, -1)[..., 0]
 
-    input_cumheights = cumheights.gather(-1, bin_idx)[..., 0]
+    input_cumheights = cumheights.take_along_axis(bin_idx, -1)[..., 0]
     delta = heights / widths
-    input_delta = delta.gather(-1, bin_idx)[..., 0]
+    input_delta = delta.take_along_axis(bin_idx, -1)[..., 0]
 
-    input_derivatives = derivatives.gather(-1, bin_idx)[..., 0]
-    input_derivatives_plus_one = derivatives[..., 1:].gather(-1, bin_idx)[..., 0]
+    input_derivatives = derivatives.take_along_axis(bin_idx, -1)[..., 0]
+    input_derivatives_plus_one = derivatives[..., 1:].take_along_axis(bin_idx, -1)[..., 0]
 
-    input_heights = heights.gather(-1, bin_idx)[..., 0]
+    input_heights = heights.take_along_axis(bin_idx, -1)[..., 0]
 
     if inverse:
         a = (((inputs - input_cumheights) * (input_derivatives + input_derivatives_plus_one - 2 * input_delta)

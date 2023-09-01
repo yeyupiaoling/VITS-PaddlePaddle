@@ -24,18 +24,9 @@ class LayerNorm(nn.Layer):
                                                 paddle.zeros(shape=[channels])))
 
     def forward(self, x):
-        # TODO
-        perm_18 = list(range(x.ndim))
-        perm_18[1] = -1
-        perm_18[-1] = 1
-        # x = x.transpose(perm=perm_18)
-        x = x.transpose(1, -1)
+        x = x.transpose([0, 2, 1])
         x = F.layer_norm(x, (self.channels,), self.gamma, self.beta, self.eps)
-        perm_19 = list(range(x.ndim))
-        perm_19[1] = -1
-        perm_19[-1] = 1
-        return x.transpose(perm=perm_19)
-        # return x.transpose(1, -1)
+        return x.transpose([0, 2, 1])
 
 
 class ConvReluNorm(nn.Layer):
@@ -388,7 +379,7 @@ class ConvFlow(nn.Layer):
         h = self.proj(h) * x_mask
 
         b, c, t = x0.shape
-        h = h.reshape(b, c, -1, t).permute(0, 1, 3, 2)  # [b, cx?, t] -> [b, c, t, ?]
+        h = h.reshape([b, c, -1, t]).transpose([0, 1, 3, 2])  # [b, cx?, t] -> [b, c, t, ?]
 
         unnormalized_widths = h[..., :self.num_bins] / math.sqrt(self.filter_channels)
         unnormalized_heights = h[..., self.num_bins:2 * self.num_bins] / math.sqrt(self.filter_channels)

@@ -58,7 +58,15 @@ python -m pip install ppvits -U -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```shell
 git clone https://github.com/yeyupiaoling/VITS-PaddlePaddle.git
 cd VITS-PaddlePaddle/
-python setup.py install
+pip install .
+```
+
+- 安装`monotonic-align-paddle`库
+
+```shell
+cd tools/monotonic_align_paddle
+pip install .
+cd -
 ```
 
 ## 准备数据

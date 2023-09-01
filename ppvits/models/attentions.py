@@ -4,7 +4,7 @@ import paddle
 from paddle import nn
 from paddle.nn import functional as F
 
-from ppvits.models.commons import convert_pad_shape, subsequent_mask
+from ppvits.models.commons import convert_pad_shape, subsequent_mask, masked_fill
 from ppvits.models.modules import LayerNorm
 
 
@@ -181,11 +181,11 @@ class MultiHeadAttention(nn.Layer):
             assert t_s == t_t, "Proximal bias is only available for self-attention."
             scores = scores + self._attention_bias_proximal(t_s).astype(scores.dtype)
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e4)
+            scores = masked_fill(scores, mask == 0, -1e4)
             if self.block_length is not None:
                 assert t_s == t_t, "Local attention is only available for self-attention."
                 block_mask = paddle.ones_like(scores).triu(-self.block_length).tril(self.block_length)
-                scores = scores.masked_fill(block_mask == 0, -1e4)
+                scores = masked_fill(scores, block_mask == 0, -1e4)
         p_attn = F.softmax(scores, axis=-1)  # [b, n_h, t_t, t_s]
         p_attn = self.drop(p_attn)
         output = paddle.matmul(p_attn, value)
@@ -193,7 +193,7 @@ class MultiHeadAttention(nn.Layer):
             relative_weights = self._absolute_position_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, t_s)
             output = output + self._matmul_with_relative_values(relative_weights, value_relative_embeddings)
-        output = output.transpose([0, 1, 3, 2]).contiguous().reshape([b, d, t_t])  # [b, n_h, t_t, d_k] -> [b, d, t_t]
+        output = output.transpose([0, 1, 3, 2]).reshape([b, d, t_t])  # [b, n_h, t_t, d_k] -> [b, d, t_t]
         return output, p_attn
 
     def _matmul_with_relative_values(self, x, y):
@@ -235,11 +235,11 @@ class MultiHeadAttention(nn.Layer):
         """
         batch, heads, length, _ = x.shape
         # Concat columns of pad to shift from relative to absolute indexing.
-        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, 1]]))
 
         # Concat extra elements so to add up to shape (len+1, 2*len-1).
         x_flat = x.reshape([batch, heads, length * 2 * length])
-        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [0, length - 1]]))
+        x_flat = F.pad(x_flat, convert_pad_shape([[0, length - 1]]), data_format="NCL")
 
         # Reshape and slice out the padded elements.
         x_final = x_flat.reshape([batch, heads, length + 1, 2 * length - 1])[:, :, :length, length - 1:]
@@ -252,10 +252,10 @@ class MultiHeadAttention(nn.Layer):
         """
         batch, heads, length, _ = x.shape
         # padd along column
-        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, length - 1]]))
         x_flat = x.reshape([batch, heads, length ** 2 + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
-        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
+        x_flat = F.pad(x_flat, convert_pad_shape([[length, 0]]), data_format="NCL")
         x_final = x_flat.reshape([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
@@ -307,8 +307,8 @@ class FFN(nn.Layer):
             return x
         pad_l = self.kernel_size - 1
         pad_r = 0
-        padding = [[0, 0], [0, 0], [pad_l, pad_r]]
-        x = F.pad(x, convert_pad_shape(padding))
+        padding = [[pad_l, pad_r]]
+        x = F.pad(x, convert_pad_shape(padding), data_format="NCL")
         return x
 
     def _same_padding(self, x):
@@ -316,6 +316,6 @@ class FFN(nn.Layer):
             return x
         pad_l = (self.kernel_size - 1) // 2
         pad_r = self.kernel_size // 2
-        padding = [[0, 0], [0, 0], [pad_l, pad_r]]
-        x = F.pad(x, convert_pad_shape(padding))
+        padding = [[pad_l, pad_r]]
+        x = F.pad(x, convert_pad_shape(padding), data_format="NCL")
         return x

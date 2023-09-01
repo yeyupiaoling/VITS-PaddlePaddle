@@ -165,8 +165,9 @@ class PPVITSTrainer(object):
         else:
             raise Exception(f'不支持优化方法：{optimizer}')
         # 加载模型
-        latest_epoch = self.__load_model(model_dir=model_dir, resume_model=resume_model,
-                                         pretrained_model=pretrained_model)
+        # latest_epoch = self.__load_model(model_dir=model_dir, resume_model=resume_model,
+        #                                  pretrained_model=pretrained_model)
+        latest_epoch = 0
         # freeze all other layers except speaker embedding
         for p in self.net_g.parameters():
             p.requires_grad = True
@@ -205,6 +206,7 @@ class PPVITSTrainer(object):
         latest_epoch = self.__setup_model(n_gpus=n_gpus, model_dir=model_dir,
                                           resume_model=resume_model,
                                           pretrained_model=pretrained_model)
+        # self.__save_model(epoch_id=latest_epoch, model_dir=model_dir)
         self.train_step = 0
         if rank == 0:
             writer.add_scalar('Train/lr_g', self.scheduler_g.get_lr(), latest_epoch)
@@ -248,9 +250,11 @@ class PPVITSTrainer(object):
             resume_g_model_path = os.path.join(resume_model, "g_net.pdparams")
             resume_d_model_path = os.path.join(resume_model, "d_net.pdparams")
             if os.path.exists(resume_g_model_path):
-                _, _, _, latest_epoch = load_checkpoint(resume_g_model_path, self.net_g, self.optim_g)
+                _, _, _, latest_epoch = load_checkpoint(resume_g_model_path, self.net_g, self.optim_g,
+                                                        drop_speaker_emb=True, is_pretrained=True)
             if os.path.exists(resume_d_model_path):
-                _, _, _, latest_epoch = load_checkpoint(resume_d_model_path, self.net_d, self.optim_d)
+                _, _, _, latest_epoch = load_checkpoint(resume_d_model_path, self.net_d, self.optim_d,
+                                                        drop_speaker_emb=True, is_pretrained=True)
         return latest_epoch
 
     # 保存模型
@@ -258,10 +262,12 @@ class PPVITSTrainer(object):
         save_dir = os.path.join(model_dir, f"epoch_{epoch_id}")
         latest_dir = os.path.join(model_dir, "latest")
         # 保存模型
-        save_checkpoint(self.net_g, self.optim_g, self.configs.train_conf.learning_rate, epoch_id,
-                        os.path.join(save_dir, "g_net.pdparams"), speakers=self.speakers)
-        save_checkpoint(self.net_d, self.optim_d, self.configs.train_conf.learning_rate, epoch_id,
-                        os.path.join(save_dir, "d_net.pdparams"), speakers=self.speakers)
+        save_checkpoint(self.net_g, self.optim_g, self.configs.optimizer_conf.scheduler_args.learning_rate, epoch_id,
+                        os.path.join(save_dir, "g_net.pdparams"), speakers=self.speakers,
+                        text_cleaner=self.configs.dataset_conf.text_cleaner)
+        save_checkpoint(self.net_d, self.optim_d, self.configs.optimizer_conf.scheduler_args.learning_rate, epoch_id,
+                        os.path.join(save_dir, "d_net.pdparams"), speakers=self.speakers,
+                        text_cleaner=self.configs.dataset_conf.text_cleaner)
         if os.path.exists(latest_dir):
             shutil.rmtree(latest_dir)
         shutil.copytree(save_dir, latest_dir)
@@ -315,7 +321,7 @@ class PPVITSTrainer(object):
                 # Generator
                 y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = self.net_d(y, y_hat)
                 with paddle.amp.auto_cast(enable=False):
-                    loss_dur = paddle.sum(l_length.float())
+                    loss_dur = paddle.sum(l_length.astype(paddle.float32))
                     loss_mel = F.l1_loss(y_mel, y_hat_mel) * self.configs.train_conf.c_mel
                     loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * self.configs.train_conf.c_kl
 
