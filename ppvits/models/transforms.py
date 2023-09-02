@@ -69,9 +69,9 @@ def unconstrained_rational_quadratic_spline(inputs,
         raise RuntimeError('{} tails are not implemented.'.format(tails))
     # TODO
     o, l = rational_quadratic_spline(inputs=inputs[inside_interval_mask],
-                                     unnormalized_widths=unnormalized_widths[inside_interval_mask],
-                                     unnormalized_heights=unnormalized_heights[inside_interval_mask],
-                                     unnormalized_derivatives=unnormalized_derivatives[inside_interval_mask],
+                                     unnormalized_widths=unnormalized_widths[inside_interval_mask, :],
+                                     unnormalized_heights=unnormalized_heights[inside_interval_mask, :],
+                                     unnormalized_derivatives=unnormalized_derivatives[inside_interval_mask, :],
                                      inverse=inverse,
                                      left=-tail_bound, right=tail_bound, bottom=-tail_bound, top=tail_bound,
                                      min_bin_width=min_bin_width,

@@ -73,10 +73,10 @@ def spec_to_mel_paddle(spec, n_fft, num_mels, sampling_rate, fmin, fmax):
 
 
 def mel_spectrogram_paddle(y, n_fft, num_mels, sampling_rate, hop_size, win_size, fmin, fmax, center=False):
-    if paddle.min(y) < -1.:
-        print('min value is ', paddle.min(y))
-    if paddle.max(y) > 1.:
-        print('max value is ', paddle.max(y))
+    # if paddle.min(y) < -1.:
+    #     print('min value is ', paddle.min(y))
+    # if paddle.max(y) > 1.:
+    #     print('max value is ', paddle.max(y))
 
     global mel_basis, hann_window
     fmax_dtype = str(fmax) + '_' + str(y.dtype)

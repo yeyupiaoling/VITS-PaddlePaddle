@@ -165,9 +165,8 @@ class PPVITSTrainer(object):
         else:
             raise Exception(f'不支持优化方法：{optimizer}')
         # 加载模型
-        # latest_epoch = self.__load_model(model_dir=model_dir, resume_model=resume_model,
-        #                                  pretrained_model=pretrained_model)
-        latest_epoch = 0
+        latest_epoch = self.__load_model(model_dir=model_dir, resume_model=resume_model,
+                                         pretrained_model=pretrained_model)
         # freeze all other layers except speaker embedding
         for p in self.net_g.parameters():
             p.requires_grad = True
@@ -206,7 +205,7 @@ class PPVITSTrainer(object):
         latest_epoch = self.__setup_model(n_gpus=n_gpus, model_dir=model_dir,
                                           resume_model=resume_model,
                                           pretrained_model=pretrained_model)
-        # self.__save_model(epoch_id=latest_epoch, model_dir=model_dir)
+        self.__save_model(epoch_id=latest_epoch, model_dir=model_dir)
         self.train_step = 0
         if rank == 0:
             writer.add_scalar('Train/lr_g', self.scheduler_g.get_lr(), latest_epoch)
@@ -311,11 +310,24 @@ class PPVITSTrainer(object):
                 with paddle.amp.auto_cast(enable=False):
                     loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
                     loss_disc_all = loss_disc
+            # 是否开启自动混合精度
+            if self.configs.train_conf.enable_amp:
+                scaled = self.amp_scaler.scale(loss_disc_all)
+                scaled.backward()
+            else:
+                loss_disc_all.backward()
+            if self.configs.train_conf.enable_amp:
+                self.amp_scaler.step(self.optim_d)
+                self.amp_scaler.update()
+            else:
+                self.optim_d.step()
             self.optim_d.clear_grad()
-            self.amp_scaler.scale(loss_disc_all).backward()
-            self.amp_scaler.unscale_(self.optim_d)
-            clip_grad_value_(self.net_d.parameters(), None)
-            self.amp_scaler.step(self.optim_d)
+
+            # self.optim_d.clear_grad()
+            # self.amp_scaler.scale(loss_disc_all).backward()
+            # self.amp_scaler.unscale_(self.optim_d)
+            # clip_grad_value_(self.net_d.parameters(), None)
+            # self.amp_scaler.step(self.optim_d)
 
             with paddle.amp.auto_cast(enable=self.configs.train_conf.enable_amp):
                 # Generator
@@ -328,15 +340,28 @@ class PPVITSTrainer(object):
                     loss_fm = feature_loss(fmap_r, fmap_g)
                     loss_gen, losses_gen = generator_loss(y_d_hat_g)
                     loss_gen_all = loss_gen + loss_fm + loss_mel + loss_dur + loss_kl
+            # 是否开启自动混合精度
+            if self.configs.train_conf.enable_amp:
+                scaled = self.amp_scaler.scale(loss_gen_all)
+                scaled.backward()
+            else:
+                loss_gen_all.backward()
+            if self.configs.train_conf.enable_amp:
+                self.amp_scaler.step(self.optim_g)
+                self.amp_scaler.update()
+            else:
+                self.optim_g.step()
             self.optim_g.clear_grad()
-            self.amp_scaler.scale(loss_gen_all).backward()
-            self.amp_scaler.unscale_(self.optim_g)
-            grad_norm_g = clip_grad_value_(self.net_g.parameters(), None)
-            self.amp_scaler.step(self.optim_g)
-            self.amp_scaler.update()
+
+            # self.optim_g.clear_grad()
+            # self.amp_scaler.scale(loss_gen_all).backward()
+            # self.amp_scaler.unscale_(self.optim_g)
+            # grad_norm_g = clip_grad_value_(self.net_g.parameters(), None)
+            # self.amp_scaler.step(self.optim_g)
+            # self.amp_scaler.update()
 
             if rank == 0 and batch_idx % self.configs.train_conf.log_interval == 0:
-                scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all, "grad_norm_g": grad_norm_g}
+                scalar_dict = {"loss/g/total": loss_gen_all, "loss/d/total": loss_disc_all}
                 scalar_dict.update({"loss/g/fm": loss_fm, "loss/g/mel": loss_mel, "loss/g/dur": loss_dur,
                                     "loss/g/kl": loss_kl})
                 scalar_dict.update({"loss/g/{}".format(i): v for i, v in enumerate(losses_gen)})

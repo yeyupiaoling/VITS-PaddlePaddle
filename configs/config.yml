@@ -7,7 +7,7 @@ dataset_conf:
   # 说话人字典
   speakers_file: dataset/speakers.json
   # 训练的批量大小
-  batch_size: 4
+  batch_size: 16
   # 评估数据数量，不能大于batch_size
   eval_sum: 2
   # 读取数据的线程数量

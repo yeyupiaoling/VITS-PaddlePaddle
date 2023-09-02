@@ -276,7 +276,7 @@ class Flip(nn.Layer):
     def forward(self, x, *args, reverse=False, **kwargs):
         x = paddle.flip(x, [1])
         if not reverse:
-            logdet = paddle.zeros(x.shape[0]).astype(x.dtype)
+            logdet = paddle.zeros([x.shape[0]]).astype(x.dtype)
             return x, logdet
         else:
             return x
