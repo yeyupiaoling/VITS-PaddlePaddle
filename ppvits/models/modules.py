@@ -1,4 +1,5 @@
 import math
+from typing import Tuple, Union, Optional
 
 import paddle
 from paddle import nn
@@ -183,30 +184,30 @@ class ResBlock1(nn.Layer):
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[0],
                                   padding=get_padding(kernel_size, dilation[0]),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[1],
                                   padding=get_padding(kernel_size, dilation[1]),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[2],
                                   padding=get_padding(kernel_size, dilation[2]),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
 
         self.convs2 = nn.LayerList([
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
                                   padding=get_padding(kernel_size, 1),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
                                   padding=get_padding(kernel_size, 1),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=1,
                                   padding=get_padding(kernel_size, 1),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
 
     def forward(self, x, x_mask=None):
@@ -238,11 +239,11 @@ class ResBlock2(paddle.nn.Layer):
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[0],
                                   padding=get_padding(kernel_size, dilation[0]),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01)))),
             weight_norm(nn.Conv1D(channels, channels, kernel_size, 1, dilation=dilation[1],
                                   padding=get_padding(kernel_size, dilation[1]),
                                   weight_attr=paddle.framework.ParamAttr(
-                                    initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
+                                      initializer=paddle.nn.initializer.Normal(mean=0.0, std=0.01))))
         ])
 
     def forward(self, x, x_mask=None):
@@ -262,9 +263,33 @@ class ResBlock2(paddle.nn.Layer):
 
 
 class Log(nn.Layer):
-    def forward(self, x, x_mask, reverse=False, **kwargs):
+    """Log flow module."""
+
+    def forward(self,
+                x: paddle.Tensor,
+                x_mask: paddle.Tensor,
+                reverse: bool = False,
+                eps: float = 1e-5,
+                **kwargs
+                ) -> Union[paddle.Tensor, Tuple[paddle.Tensor, paddle.Tensor]]:
+        """Calculate forward propagation.
+        Args:
+            x (Tensor):
+                Input tensor (B, channels, T).
+            x_mask (Tensor):
+                Mask tensor (B, 1, T).
+            reverse (bool):
+                Whether to inverse the flow.
+            eps (float):
+                Epsilon for log.
+        Returns:
+            Tensor:
+                Output tensor (B, channels, T).
+            Tensor:
+                Log-determinant tensor for NLL (B,) if not inverse.
+        """
         if not reverse:
-            y = paddle.log(x=paddle.clip(x=x, min=1e-05)) * x_mask
+            y = paddle.log(paddle.clip(x, min=eps)) * x_mask
             logdet = paddle.sum(-y, [1, 2])
             return y, logdet
         else:
@@ -283,17 +308,44 @@ class Flip(nn.Layer):
 
 
 class ElementwiseAffine(nn.Layer):
-    def __init__(self, channels):
-        super().__init__()
-        self.channels = channels
-        self.m = paddle.create_parameter(shape=[channels, 1], dtype=paddle.float32,
-                                         default_initializer=paddle.nn.initializer.Assign(
-                                             paddle.zeros(shape=[channels, 1])))
-        self.logs = paddle.create_parameter(shape=[channels, 1], dtype=paddle.float32,
-                                            default_initializer=paddle.nn.initializer.Assign(
-                                                paddle.zeros(shape=[channels, 1])))
+    """Elementwise affine flow module."""
 
-    def forward(self, x, x_mask, reverse=False, **kwargs):
+    def __init__(self, channels: int):
+        """Initialize ElementwiseAffineFlow module.
+        Args:
+            channels (int):
+                Number of channels.
+        """
+        super().__init__()
+        m = paddle.zeros([channels, 1])
+        self.m = paddle.create_parameter(shape=m.shape,
+                                         dtype=paddle.float32,
+                                         default_initializer=paddle.nn.initializer.Assign(m))
+        logs = paddle.zeros([channels, 1])
+        self.logs = paddle.create_parameter(shape=logs.shape,
+                                            dtype=paddle.float32,
+                                            default_initializer=paddle.nn.initializer.Assign(logs))
+
+    def forward(self,
+                x: paddle.Tensor,
+                x_mask: paddle.Tensor,
+                reverse: bool = False,
+                **kwargs
+                ) -> Union[paddle.Tensor, Tuple[paddle.Tensor, paddle.Tensor]]:
+        """Calculate forward propagation.
+        Args:
+            x (Tensor):
+                Input tensor (B, channels, T).
+            x_mask (Tensor):
+                Mask tensor (B, 1, T).
+            reverse (bool):
+                Whether to inverse the flow.
+        Returns:
+            Tensor:
+                Output tensor (B, channels, T).
+            Tensor:
+                Log-determinant tensor for NLL (B,) if not inverse.
+        """
         if not reverse:
             y = self.m + paddle.exp(self.logs) * x
             y = y * x_mask
@@ -355,47 +407,92 @@ class ResidualCouplingLayer(nn.Layer):
 
 
 class ConvFlow(nn.Layer):
-    def __init__(self, in_channels, filter_channels, kernel_size, n_layers, num_bins=10, tail_bound=5.0):
+    """Convolutional flow module."""
+
+    def __init__(self, in_channels: int, filter_channels: int, kernel_size: int, n_layers: int, num_bins: int = 10,
+                 tail_bound: float = 5.0, ):
+        """Initialize ConvFlow module.
+        Args:
+            in_channels (int):
+                Number of input channels.
+            filter_channels (int):
+                Number of hidden channels.
+            kernel_size (int):
+                Kernel size.
+            n_layers (int):
+                Number of layers.
+            num_bins (int):
+                Number of bins.
+            tail_bound (float):
+                Tail bound value.
+        """
         super().__init__()
-        self.in_channels = in_channels
-        self.filter_channels = filter_channels
-        self.kernel_size = kernel_size
-        self.n_layers = n_layers
-        self.num_bins = num_bins
-        self.tail_bound = tail_bound
         self.half_channels = in_channels // 2
+        self.hidden_channels = filter_channels
+        self.bins = num_bins
+        self.tail_bound = tail_bound
 
-        self.pre = nn.Conv1D(self.half_channels, filter_channels, 1)
+        self.input_conv = nn.Conv1D(self.half_channels, filter_channels, 1, )
         self.convs = DDSConv(filter_channels, kernel_size, n_layers, p_dropout=0.)
-        self.proj = nn.Conv1D(filter_channels, self.half_channels * (num_bins * 3 - 1), 1)
-        # TODO
-        # self.proj.weight.data.zero_()
-        # self.proj.bias.data.zero_()
+        self.proj = nn.Conv1D(filter_channels, self.half_channels * (num_bins * 3 - 1), 1, )
 
-    def forward(self, x, x_mask, g=None, reverse=False):
-        x0, x1 = paddle.split(x, [self.half_channels] * 2, 1)
-        h = self.pre(x0)
+        weight = paddle.zeros(paddle.shape(self.proj.weight))
+        self.proj.weight = paddle.create_parameter(shape=weight.shape,
+                                                   dtype=paddle.float32,
+                                                   default_initializer=paddle.nn.initializer.Assign(weight))
+
+        bias = paddle.zeros(paddle.shape(self.proj.bias))
+        self.proj.bias = paddle.create_parameter(shape=bias.shape,
+                                                 dtype=paddle.float32,
+                                                 default_initializer=paddle.nn.initializer.Assign(bias))
+
+    def forward(
+            self,
+            x: paddle.Tensor,
+            x_mask: paddle.Tensor,
+            g: Optional[paddle.Tensor] = None,
+            reverse: bool = False,
+    ) -> Union[paddle.Tensor, Tuple[paddle.Tensor, paddle.Tensor]]:
+        """Calculate forward propagation.
+        Args:
+            x (Tensor):
+                Input tensor (B, channels, T).
+            x_mask (Tensor):
+                Mask tensor (B, 1, T).
+            g (Optional[Tensor]):
+                Global conditioning tensor (B, channels, 1).
+            reverse (bool):
+                Whether to inverse the flow.
+        Returns:
+            Tensor:
+                Output tensor (B, channels, T).
+            Tensor:
+                Log-determinant tensor for NLL (B,) if not inverse.
+        """
+        xa, xb = x.split(2, 1)
+        h = self.input_conv(xa)
         h = self.convs(h, x_mask, g=g)
+        # (B, half_channels * (bins * 3 - 1), T)
         h = self.proj(h) * x_mask
 
-        b, c, t = x0.shape
-        h = h.reshape([b, c, -1, t]).transpose([0, 1, 3, 2])  # [b, cx?, t] -> [b, c, t, ?]
+        b, c, t = xa.shape
+        # (B, half_channels, bins * 3 - 1, T) -> (B, half_channels, T, bins * 3 - 1)
+        h = h.reshape([b, c, -1, t]).transpose([0, 1, 3, 2])
 
-        unnormalized_widths = h[..., :self.num_bins] / math.sqrt(self.filter_channels)
-        unnormalized_heights = h[..., self.num_bins:2 * self.num_bins] / math.sqrt(self.filter_channels)
-        unnormalized_derivatives = h[..., 2 * self.num_bins:]
+        denom = math.sqrt(self.hidden_channels)
+        unnorm_widths = h[..., :self.bins] / denom
+        unnorm_heights = h[..., self.bins:2 * self.bins] / denom
+        unnorm_derivatives = h[..., 2 * self.bins:]
 
-        x1, logabsdet = piecewise_rational_quadratic_transform(x1,
-                                                               unnormalized_widths,
-                                                               unnormalized_heights,
-                                                               unnormalized_derivatives,
-                                                               inverse=reverse,
-                                                               tails='linear',
-                                                               tail_bound=self.tail_bound
-                                                               )
-
-        x = paddle.concat([x0, x1], 1) * x_mask
-        logdet = paddle.sum(logabsdet * x_mask, [1, 2])
+        xb, logdet_abs = piecewise_rational_quadratic_transform(inputs=xb,
+                                                                unnormalized_widths=unnorm_widths,
+                                                                unnormalized_heights=unnorm_heights,
+                                                                unnormalized_derivatives=unnorm_derivatives,
+                                                                inverse=reverse,
+                                                                tails="linear",
+                                                                tail_bound=self.tail_bound, )
+        x = paddle.concat([xa, xb], 1) * x_mask
+        logdet = paddle.sum(logdet_abs * x_mask, [1, 2])
         if not reverse:
             return x, logdet
         else:
