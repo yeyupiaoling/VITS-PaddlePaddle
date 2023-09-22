@@ -429,7 +429,7 @@ class ConvFlow(nn.Layer):
         super().__init__()
         self.half_channels = in_channels // 2
         self.hidden_channels = filter_channels
-        self.bins = num_bins
+        self.num_bins = num_bins
         self.tail_bound = tail_bound
 
         self.input_conv = nn.Conv1D(self.half_channels, filter_channels, 1, )
@@ -469,29 +469,29 @@ class ConvFlow(nn.Layer):
             Tensor:
                 Log-determinant tensor for NLL (B,) if not inverse.
         """
-        xa, xb = x.split(2, 1)
-        h = self.input_conv(xa)
+        x0, x1 = x.split(2, 1)
+        h = self.input_conv(x0)
         h = self.convs(h, x_mask, g=g)
         # (B, half_channels * (bins * 3 - 1), T)
         h = self.proj(h) * x_mask
 
-        b, c, t = xa.shape
+        b, c, t = x0.shape
         # (B, half_channels, bins * 3 - 1, T) -> (B, half_channels, T, bins * 3 - 1)
         h = h.reshape([b, c, -1, t]).transpose([0, 1, 3, 2])
 
         denom = math.sqrt(self.hidden_channels)
-        unnorm_widths = h[..., :self.bins] / denom
-        unnorm_heights = h[..., self.bins:2 * self.bins] / denom
-        unnorm_derivatives = h[..., 2 * self.bins:]
+        unnorm_widths = h[..., :self.num_bins] / denom
+        unnorm_heights = h[..., self.num_bins:2 * self.num_bins] / denom
+        unnorm_derivatives = h[..., 2 * self.num_bins:]
 
-        xb, logdet_abs = piecewise_rational_quadratic_transform(inputs=xb,
+        x1, logdet_abs = piecewise_rational_quadratic_transform(inputs=x1,
                                                                 unnormalized_widths=unnorm_widths,
                                                                 unnormalized_heights=unnorm_heights,
                                                                 unnormalized_derivatives=unnorm_derivatives,
                                                                 inverse=reverse,
                                                                 tails="linear",
                                                                 tail_bound=self.tail_bound, )
-        x = paddle.concat([xa, xb], 1) * x_mask
+        x = paddle.concat([x0, x1], 1) * x_mask
         logdet = paddle.sum(logdet_abs * x_mask, [1, 2])
         if not reverse:
             return x, logdet
