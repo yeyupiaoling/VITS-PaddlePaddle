@@ -41,8 +41,6 @@ def mask_preprocess(x, mask):
     # bins.dtype = int32
     B, C, T, bins = paddle.shape(x)
     mask_int = paddle.cast(mask, dtype='int64')
-    # paddle.sum 输入是 int32 或 bool 的时候，输出是 int64
-    # paddle.zeros (fill_constant) 的 shape 会被强制转成 int32 类型
     new_x = paddle.zeros([paddle.sum(mask_int), bins])
     for i in range(bins):
         new_x[:, i] = x[:, :, :, i][mask]
@@ -61,13 +59,9 @@ def unconstrained_rational_quadratic_spline(inputs,
                                             min_derivative=DEFAULT_MIN_DERIVATIVE):
     inside_interval_mask = (inputs >= -tail_bound) & (inputs <= tail_bound)
     outside_interval_mask = ~inside_interval_mask
-    # for dygraph to static
-    # 这里用 paddle.shape(x) 然后调用 zeros 会得到一个全 -1 shape 的 var
-    # 如果用 x.shape 的话可以保留确定的维度
     outputs = paddle.zeros(inputs.shape)
     logabsdet = paddle.zeros(inputs.shape)
     if tails == "linear":
-        # 注意 padding 的参数顺序
         pad2d = nn.Pad2D(padding=[1, 1, 0, 0], mode='constant')
         unnormalized_derivatives = pad2d(unnormalized_derivatives)
         constant = np.log(np.exp(1 - min_derivative) - 1)
