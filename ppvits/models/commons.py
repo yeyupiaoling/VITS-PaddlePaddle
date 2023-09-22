@@ -10,8 +10,7 @@ def get_padding(kernel_size, dilation=1):
 
 
 def convert_pad_shape(pad_shape):
-    l = pad_shape[::-1]
-    pad_shape = [item for sublist in l for item in sublist]
+    pad_shape = [item for sublist in pad_shape for item in sublist]
     return pad_shape
 
 
@@ -61,34 +60,6 @@ def rand_slice_segments(x, x_lengths=None, segment_size=4):
     return ret, ids_str
 
 
-def get_timing_signal_1d(
-        length, channels, min_timescale=1.0, max_timescale=1.0e4):
-    position = paddle.arange(length, dtype=paddle.float32)
-    num_timescales = channels // 2
-    log_timescale_increment = (
-            math.log(float(max_timescale) / float(min_timescale)) /
-            (num_timescales - 1))
-    inv_timescales = min_timescale * paddle.exp(
-        paddle.arange(num_timescales, dtype=paddle.float32) * -log_timescale_increment)
-    scaled_time = position.unsqueeze(0) * inv_timescales.unsqueeze(1)
-    signal = paddle.concat([paddle.sin(scaled_time), paddle.cos(scaled_time)], 0)
-    signal = F.pad(signal, [0, channels % 2])
-    signal = signal.reshape([1, channels, length])
-    return signal
-
-
-def add_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4):
-    b, channels, length = x.shape
-    signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale)
-    return x + signal.astype(x.dtype)
-
-
-def cat_timing_signal_1d(x, min_timescale=1.0, max_timescale=1.0e4, axis=1):
-    b, channels, length = x.shape
-    signal = get_timing_signal_1d(length, channels, min_timescale, max_timescale)
-    return paddle.concat([x, signal.astype(x.dtype)], axis)
-
-
 def subsequent_mask(length):
     mask = paddle.tril(paddle.ones(length, length)).unsqueeze(0).unsqueeze(0)
     return mask
@@ -105,7 +76,7 @@ def fused_add_tanh_sigmoid_multiply(input_a, input_b, n_channels):
 
 
 def shift_1d(x):
-    x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [1, 0]]))[:, :, :-1]
+    x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [1, 0]]))[:, :, :-1]
     return x
 
 
@@ -127,7 +98,7 @@ def generate_path(duration, mask):
     cum_duration_flat = cum_duration.reshape([b * t_x])
     path = sequence_mask(cum_duration_flat, t_y).astype(mask.dtype)
     path = path.reshape([b, t_x, t_y])
-    path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]))[:, :-1]
+    path = path - F.pad(path, convert_pad_shape([[0, 0], [1, 0], [0, 0]]), data_format='NCL')[:, :-1]
     path = path.unsqueeze(1).transpose([0, 1, 3, 2]) * mask
     return path
 

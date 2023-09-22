@@ -3,6 +3,7 @@ import random
 
 import numpy as np
 import paddle
+import torchaudio
 import paddleaudio
 
 from ppvits.data_utils.mel_processing import spectrogram_paddle
@@ -57,13 +58,18 @@ class TextAudioSpeakerLoader(paddle.io.Dataset):
         return text, spec, wav, sid
 
     def get_audio(self, filename):
-        audio_norm, sampling_rate = paddleaudio.backends.soundfile_load(filename)
-        audio_norm = audio_norm[np.newaxis, :]
-        audio_norm = paddleaudio.backends.resample(audio_norm, src_sr=sampling_rate, target_sr=self.sampling_rate)
-        audio_norm = paddle.to_tensor(audio_norm, dtype=paddle.float32)
+        # audio_norm, sampling_rate = paddleaudio.backends.soundfile_load(filename)
+        # audio_norm = audio_norm[np.newaxis, :]
+        # audio_norm = paddleaudio.backends.resample(audio_norm, src_sr=sampling_rate, target_sr=self.sampling_rate)
+        # audio_norm = paddle.to_tensor(audio_norm, dtype=paddle.float32)
+
+        audio_norm, sampling_rate = torchaudio.load(filename)
+        audio_norm = torchaudio.functional.resample(audio_norm, orig_freq=sampling_rate, new_freq=self.sampling_rate)
         spec = spectrogram_paddle(audio_norm, self.filter_length, self.sampling_rate, self.hop_length, self.win_length,
                                   center=False)
         spec = spec.squeeze(0)
+
+        audio_norm = paddle.to_tensor(audio_norm.data.numpy())
         return spec, audio_norm
 
     def get_text(self, text):

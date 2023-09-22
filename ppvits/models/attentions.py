@@ -235,11 +235,11 @@ class MultiHeadAttention(nn.Layer):
         """
         batch, heads, length, _ = x.shape
         # Concat columns of pad to shift from relative to absolute indexing.
-        x = F.pad(x, convert_pad_shape([[0, 0], [0, 1]]))
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, 1]]))
 
         # Concat extra elements so to add up to shape (len+1, 2*len-1).
         x_flat = x.reshape([batch, heads, length * 2 * length])
-        x_flat = F.pad(x_flat, convert_pad_shape([[0, length - 1]]), data_format="NCL")
+        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [0, length - 1]]), data_format="NCL")
 
         # Reshape and slice out the padded elements.
         x_final = x_flat.reshape([batch, heads, length + 1, 2 * length - 1])[:, :, :length, length - 1:]
@@ -252,10 +252,10 @@ class MultiHeadAttention(nn.Layer):
         """
         batch, heads, length, _ = x.shape
         # padd along column
-        x = F.pad(x, convert_pad_shape([[0, 0], [0, length - 1]]))
+        x = F.pad(x, convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]]))
         x_flat = x.reshape([batch, heads, length ** 2 + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
-        x_flat = F.pad(x_flat, convert_pad_shape([[length, 0]]), data_format="NCL")
+        x_flat = F.pad(x_flat, convert_pad_shape([[0, 0], [0, 0], [length, 0]]), data_format="NCL")
         x_final = x_flat.reshape([batch, heads, length, 2 * length])[:, :, :, 1:]
         return x_final
 
@@ -307,8 +307,8 @@ class FFN(nn.Layer):
             return x
         pad_l = self.kernel_size - 1
         pad_r = 0
-        padding = [[pad_l, pad_r]]
-        x = F.pad(x, convert_pad_shape(padding), data_format="NCL")
+        padding = [[0, 0], [0, 0], [pad_l, pad_r]]
+        x = F.pad(x, convert_pad_shape(padding))
         return x
 
     def _same_padding(self, x):
@@ -316,6 +316,6 @@ class FFN(nn.Layer):
             return x
         pad_l = (self.kernel_size - 1) // 2
         pad_r = self.kernel_size // 2
-        padding = [[pad_l, pad_r]]
-        x = F.pad(x, convert_pad_shape(padding), data_format="NCL")
+        padding = [[0, 0], [0, 0], [pad_l, pad_r]]
+        x = F.pad(x, convert_pad_shape(padding))
         return x

@@ -107,6 +107,7 @@ def rational_quadratic_spline(inputs,
                               min_bin_width=1e-3,
                               min_bin_height=1e-3,
                               min_derivative=1e-3, ):
+
     pad1d = nn.Pad1D(padding=[1, 0], mode='constant', data_format='NCL', )
 
     num_bins = unnormalized_widths.shape[-1]

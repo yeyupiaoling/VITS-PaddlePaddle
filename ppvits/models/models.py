@@ -321,7 +321,7 @@ class DiscriminatorP(nn.Layer):
         b, c, t = x.shape
         if t % self.period != 0:  # pad first
             n_pad = self.period - (t % self.period)
-            x = F.pad(x, (0, n_pad), "reflect", data_format='NCL')
+            x = F.pad(x, (0, n_pad), "reflect", data_format="NCL")
             t = t + n_pad
         x = x.reshape([b, c, t // self.period, self.period])
 
