@@ -4,14 +4,12 @@ import paddle
 import yaml
 from paddle import no_grad
 
+from loguru import logger
 from ppvits import LANGUAGE_MARKS
 from ppvits.models.commons import intersperse
 from ppvits.models.models import SynthesizerTrn
 from ppvits.text import text_to_sequence, get_symbols
-from ppvits.utils.logger import setup_logger
 from ppvits.utils.utils import load_checkpoint, print_arguments, dict_to_object
-
-logger = setup_logger(__name__)
 
 
 class PPVITSPredictor:

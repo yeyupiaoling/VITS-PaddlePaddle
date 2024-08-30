@@ -13,6 +13,7 @@ from paddle.optimizer.lr import ExponentialDecay, CosineAnnealingDecay
 from tqdm import tqdm
 from visualdl import LogWriter
 
+from loguru import logger
 from ppvits import LANGUAGE_MARKS
 from ppvits.data_utils.collate_fn import TextAudioSpeakerCollate
 from ppvits.data_utils.mel_processing import mel_spectrogram_paddle, spec_to_mel_paddle
@@ -22,11 +23,8 @@ from ppvits.models.commons import clip_grad_value_, slice_segments
 from ppvits.models.losses import generator_loss, discriminator_loss, feature_loss, kl_loss
 from ppvits.models.models import SynthesizerTrn, MultiPeriodDiscriminator
 from ppvits.text import get_symbols
-from ppvits.utils.logger import setup_logger
 from ppvits.utils.utils import load_checkpoint, save_checkpoint, plot_spectrogram_to_numpy, dict_to_object, \
     print_arguments, preprocess
-
-logger = setup_logger(__name__)
 
 
 class PPVITSTrainer(object):
